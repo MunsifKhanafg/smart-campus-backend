@@ -39,7 +39,7 @@ import {
   syncSemesterCurriculum,
 } from '../controllers/courseController.js';
 import { privateUpload } from '../middleware/upload.js';
-import { programsQuery, draftSchema, boardQuery, assignSubjectSchema, generateCoursesSchema, offerSubjectsSchema, withdrawSubjectSchema, replaceSubjectSchema } from '../validators/curriculumSchemas.js';
+import { programsQuery, draftSchema, boardQuery, assignSubjectSchema, generateCoursesSchema, offerSubjectsSchema, withdrawSubjectSchema, replaceSubjectSchema, matchSemesterSchema } from '../validators/curriculumSchemas.js';
 import {
   createImport,
   listImports,
@@ -54,7 +54,7 @@ import {
   setProgramStatus,
   resyncProgram,
 } from '../controllers/curriculumController.js';
-import { board, assignSubject, generateCourses, offerSubjects, withdrawSubject, replaceSubject } from '../controllers/teachingController.js';
+import { board, assignSubject, generateCourses, offerSubjects, withdrawSubject, replaceSubject, matchSemester } from '../controllers/teachingController.js';
 
 const { UNIVERSITY_HEAD, HOD, TEACHER, FINANCE_OFFICER } = ROLES;
 const idParam = validate(z.object({ id: objectId }), 'params');
@@ -82,7 +82,7 @@ courseRouter.use(protect);
 courseRouter.get('/', authorize(UNIVERSITY_HEAD, HOD, TEACHER), validate(listCoursesQuery, 'query'), listCourses);
 courseRouter.post('/', authorize(HOD), validate(createCourseSchema), createCourse);
 // Bring the official subject names and course contents of the BS curriculum into the classes (one class, or a whole semester).
-courseRouter.post('/sync-curriculum', authorize(HOD), validate(z.object({ semester: objectId })), syncSemesterCurriculum);
+courseRouter.post('/sync-curriculum', authorize(HOD), validate(z.object({ semester: objectId, overwrite: z.boolean().optional() })), syncSemesterCurriculum);
 courseRouter.post('/:id/sync-curriculum', authorize(HOD), idParam, validate(z.object({ overwrite: z.boolean().optional() })), syncCurriculum);
 courseRouter.get('/:id', authorize(UNIVERSITY_HEAD, HOD, TEACHER), idParam, getCourse);
 courseRouter.put('/:id', authorize(HOD), idParam, validate(updateCourseSchema), updateCourse);
@@ -119,3 +119,5 @@ teachingRouter.post('/assign', authorize(HOD), validate(assignSubjectSchema), as
 teachingRouter.post('/offer', authorize(HOD), validate(offerSubjectsSchema), offerSubjects);
 teachingRouter.post('/withdraw', authorize(HOD), validate(withdrawSubjectSchema), withdrawSubject);
 teachingRouter.post('/replace', authorize(HOD), validate(replaceSubjectSchema), replaceSubject);
+// "Semester 5 must have exactly the subjects of the curriculum": fixes wrong, duplicate and missing classes (apply=false = preview).
+teachingRouter.post('/match', authorize(HOD), validate(matchSemesterSchema), matchSemester);

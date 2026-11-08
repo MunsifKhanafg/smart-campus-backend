@@ -184,7 +184,7 @@ export const syncSemesterCurriculum = asyncHandler(async (req, res) => {
   const courses = await populateCourse(Course.find({ semester: semester._id, status: COURSE_STATUS.ACTIVE }));
   const summary = { updated: 0, alreadyComplete: 0, notFound: [], noContents: [] };
   for (const course of courses) {
-    const r = await syncFromCurriculum(course, { overwrite: false });
+    const r = await syncFromCurriculum(course, { overwrite: !!req.body.overwrite });
     if (!r.matched) { summary.notFound.push(`${course.code} ${course.title}`); continue; }
     if (r.changed.length) { await course.save(); summary.updated += 1; } else summary.alreadyComplete += 1;
     if (!r.hasContents) summary.noContents.push(`${course.code} ${course.title}`);

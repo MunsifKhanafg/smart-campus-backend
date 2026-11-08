@@ -20,7 +20,7 @@ export const normalizeTitle = (t) =>
   String(t || '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
 
 // 3 = same name, 2 = one name contains the other (e.g. "Calculus" in "Calculus and Analytical Geometry"), 0 = no match
-const titleScore = (a, b) => {
+export const titleScore = (a, b) => {
   if (!a || !b) return 0;
   if (a === b) return 3;
   const [short, long] = a.length <= b.length ? [a, b] : [b, a];

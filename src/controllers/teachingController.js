@@ -12,6 +12,7 @@ import { enrollInCourses } from '../services/enrollmentService.js';
 import { notifyTeacherChange } from '../services/assignmentNotice.js';
 import { normalizeCode } from '../services/curriculumService.js';
 import { subjectsOf, createMissingClasses } from '../services/classService.js';
+import { normalizeTitle, titleScore } from '../services/outlineService.js';
 import TimetableSlot from '../models/TimetableSlot.js';
 import { findBlockers } from '../utils/blockers.js';
 import { courseBlockerChecks, purgeCourse } from '../services/courseRemoval.js';
@@ -268,4 +269,104 @@ export const replaceSubject = asyncHandler(async (req, res) => {
   }
   logAudit(req, 'teaching.replace', 'Semester', semester._id, { from, to: target.code, created: made.length, removed: removed.removed, archived: removed.archived.length });
   sendSuccess(res, { created: made.length, studentsEnrolled: enrolled, ...removed }, `${from} replaced by ${target.code}. The old class was removed from the timetable`);
+});
+
+// ---------- Make ONE semester match the curriculum ----------
+// The HOD says "semester 5 must have exactly the 5 subjects of the curriculum". This compares the classes of the semester with
+// the subjects of that semester in the approved curriculum and:
+//   keeps    classes that match a subject (matched by code, then by subject name)
+//   fixes    their code / name / credit hours / course contents when they differ from the curriculum
+//   removes  classes that are not a subject of this semester, and duplicates. A class with real records (attendance, marks ...)
+//            is archived instead, so no history is lost. Its timetable classes are removed either way.
+//   adds     compulsory subjects that have no class yet (never the elective options: the HOD offers those one by one)
+// With apply=false nothing changes: it only returns the plan, so the HOD can read it before confirming.
+export const matchSemester = asyncHandler(async (req, res) => {
+  const semester = await loadOpenSemester(req.body.semester, req.user);
+  const all = (await Program.find({ department: semester.department._id, status: 'active' }).lean()).filter((p) => subjectsOf(p, semester.number).length);
+  const program = req.body.program ? all.find((p) => String(p._id) === req.body.program) : all.length === 1 ? all[0] : null;
+  if (!program) {
+    throw ApiError.badRequest(all.length
+      ? 'Choose the BS programme of this semester'
+      : `No approved BS programme has a semester ${semester.number}. The principal uploads the curriculum under "BS Curriculum"`);
+  }
+  const subjects = subjectsOf(program, semester.number);
+  const scheme = subjects.filter((s) => !s.elective && !/XX/.test(s.code));
+
+  const courses = await Course.find({ semester: semester._id }).populate('teacher', 'name').lean();
+  const sections = [...new Set(courses.filter((c) => c.status !== COURSE_STATUS.ARCHIVED).map((c) => c.section))];
+  if (!sections.length) sections.push('A');
+
+  // which curriculum subject is this class? code first, then subject name
+  const subjectOf = (c) => {
+    const byCode = subjects.find((s) => s.code === normalizeCode(c.code));
+    if (byCode) return byCode;
+    const title = normalizeTitle(c.title);
+    let best = null;
+    for (const s of subjects) {
+      const sc = titleScore(title, normalizeTitle(s.title));
+      if (sc >= 2 && (!best || sc > best.sc)) best = { s, sc };
+    }
+    return best?.s || null;
+  };
+
+  const live = courses.filter((c) => c.status !== COURSE_STATUS.ARCHIVED);
+  const winners = new Map(); // "subject code:section" -> { c, sub }
+  const drop = []; // { course, reason }
+  for (const c of live) {
+    const sub = subjectOf(c);
+    if (!sub) { drop.push({ course: c, reason: `not a subject of semester ${semester.number} in the curriculum` }); continue; }
+    const key = `${sub.code}:${c.section}`;
+    const have = winners.get(key);
+    if (!have) { winners.set(key, { c, sub }); continue; }
+    // two classes for the same subject and section: keep the one that already has a teacher
+    if (!have.c.teacher && c.teacher) { drop.push({ course: have.c, reason: `duplicate of ${sub.code}` }); winners.set(key, { c, sub }); }
+    else drop.push({ course: c, reason: `duplicate of ${sub.code}` });
+  }
+
+  const fix = [];
+  for (const { c, sub } of winners.values()) {
+    const patch = {};
+    if (c.code !== sub.code) patch.code = sub.code;
+    if (c.title !== sub.title) patch.title = sub.title;
+    if (c.creditHours !== sub.creditHours) patch.creditHours = sub.creditHours;
+    if (sub.outline && (req.body.replaceContents ? c.outline !== sub.outline : !String(c.outline || '').trim())) patch.outline = sub.outline;
+    if (Object.keys(patch).length) fix.push({ course: c, patch });
+  }
+
+  const covered = new Set(courses.map((c) => subjectOf(c)?.code).filter(Boolean));
+  const missing = scheme.filter((s) => !covered.has(s.code));
+
+  const dropInfo = [];
+  for (const d of drop) {
+    const blockers = await findBlockers(courseBlockerChecks(d.course));
+    dropInfo.push({ ...d, archive: blockers.length > 0, because: blockers.map(([n, label]) => `${n} ${label}`).join(', ') });
+  }
+
+  const plan = {
+    program: { _id: program._id, name: program.name },
+    semesterNumber: semester.number,
+    expected: scheme.length,
+    keep: [...winners.values()].filter(({ c }) => !fix.some((f) => String(f.course._id) === String(c._id))).map(({ c }) => ({ code: c.code, title: c.title, section: c.section, teacher: c.teacher?.name || null })),
+    fix: fix.map((f) => ({ code: f.course.code, title: f.course.title, section: f.course.section, changes: Object.keys(f.patch), to: { code: f.patch.code || f.course.code, title: f.patch.title || f.course.title, creditHours: f.patch.creditHours ?? f.course.creditHours } })),
+    remove: dropInfo.map((d) => ({ code: d.course.code, title: d.course.title, section: d.course.section, teacher: d.course.teacher?.name || null, reason: d.reason, archive: d.archive, because: d.because })),
+    add: missing.map((s) => ({ code: s.code, title: s.title, creditHours: s.creditHours })),
+    sections,
+  };
+  if (!req.body.apply) return sendSuccess(res, plan, 'Plan ready. Nothing was changed yet');
+
+  // 1. remove first, so a corrected code can never collide with a class that is about to disappear
+  const removed = dropInfo.length ? await takeOut(dropInfo.map((d) => ({ ...d.course, teacher: d.course.teacher?._id || null })), semester.name) : { removed: 0, archived: [] };
+  // 2. fix the classes that stay
+  let fixed = 0;
+  for (const f of fix) {
+    try { await Course.updateOne({ _id: f.course._id }, f.patch); fixed += 1; } catch (err) { if (err.code !== 11000) throw err; }
+  }
+  // 3. add the compulsory subjects that had no class
+  const { made, enrolled } = missing.length
+    ? await createMissingClasses({ semester, program, subjects: missing, sections, userId: req.user._id })
+    : { made: [], enrolled: 0 };
+
+  logAudit(req, 'teaching.match', 'Semester', semester._id, { program: program.name, removed: removed.removed, archived: removed.archived.length, fixed, added: made.length });
+  sendSuccess(res, { ...plan, result: { removed: removed.removed, archived: removed.archived, fixed, added: made.length, studentsEnrolled: enrolled } },
+    `${semester.name} now matches the curriculum: ${removed.removed + removed.archived.length} removed, ${fixed} corrected, ${made.length} added`);
 });

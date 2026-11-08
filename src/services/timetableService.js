@@ -67,6 +67,14 @@ export const assertNoSlotConflicts = async ({ departmentId, ...params }) => {
   }
 };
 
+// The students of one section cannot attend two classes at the same time.
+export const assertSectionFree = async ({ semesterId, section, day, startMinutes, endMinutes, excludeId }) => {
+  const filter = { semester: semesterId, day, startMinutes: { $lt: endMinutes }, endMinutes: { $gt: startMinutes } };
+  if (excludeId) filter._id = { $ne: excludeId };
+  const clash = (await TimetableSlot.find(filter).populate('course', 'code section').lean()).find((s) => s.course?.section === section);
+  if (clash) throw ApiError.conflict(`Section ${section} already has ${clash.course.code} on ${day} at ${clash.startTime}-${clash.endTime}. The same students cannot attend two classes at once`);
+};
+
 // When the HOD gives a course to a different teacher, the course's timetable slots move with it.
 // The new teacher must be free at every one of those times. Returns the moved slots (empty if the course is not scheduled).
 export const reassignCourseSlots = async (course, newTeacherId) => {

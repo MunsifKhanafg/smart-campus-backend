@@ -67,6 +67,15 @@ const STOP_RX = /^(?:recommended|reference|text)?\s*books?\b|^bibliography\b|^ai
 // "Seventh (7th) Semester Specializations Elective Courses": the pool of elective courses of that semester.
 const ELECTIVE_HEAD_RX = /(?:^|[\s(])(\d{1,2})(?:st|nd|rd|th)\)?\s+semester\s+specializations?\s+elective/i;
 
+// Adds one more line to a block of course contents. The PDF wraps lines in the middle of a sentence, so lines are joined with a
+// space; a blank line, a list item ("a) ...", "1. ...", "- ...") or a heading ("Function ...") starts a new line instead.
+const LIST_START = /^(?:[a-z]\)|\d{1,2}[.)]\s|[\u2022\u00b7\u25aa*\-\u2013]\s|(?:function|week|unit|chapter|topic|module|lab|part)\b)/i;
+const joinLine = (prev, line, gap) => {
+  if (!prev) return line;
+  if (gap) return `${prev}\n\n${line}`;
+  return LIST_START.test(line) ? `${prev}\n${line}` : `${prev} ${line}`;
+};
+
 // "Specialization Elective - I" -> suffix I, so two placeholders with the same code stay two subjects.
 export const placeholderCode = (code, title) => {
   const c = String(code || '').toUpperCase();
@@ -123,7 +132,7 @@ export const parseCurriculumRules = (text) => {
 
   for (let i = 0; i < lines.length; i += 1) {
     let line = lines[i];
-    if (!line) { collect = null; continue; } // a blank line ends a contents paragraph
+    if (!line) { if (collect?.kind === 'contents') collect.gap = true; else collect = null; continue; } // contents may contain blank lines; they end only at the next heading
     if (/^\d{1,3}$/.test(line) && collect) continue; // page number inside a paragraph
 
     // ----- course contents / description of a subject we already know -----
@@ -135,9 +144,13 @@ export const parseCurriculumRules = (text) => {
       if (isContents) lastSubject.outline = first; else descriptions.set(lastSubject, first);
       continue;
     }
-    if (collect && !STOP_RX.test(line) && !SEMESTER_RX.test(line) && !COURSE_RX.test(line) && !TOTAL_RX.test(line)) {
-      if (collect.kind === 'contents') collect.subject.outline = `${collect.subject.outline || ''} ${line}`.trim().slice(0, 5000);
-      else descriptions.set(collect.subject, `${descriptions.get(collect.subject) || ''} ${line}`.trim().slice(0, 5000));
+    if (collect && !STOP_RX.test(line) && !SEMESTER_RX.test(line) && !COURSE_RX.test(line) && !TOTAL_RX.test(line) && !ELECTIVE_HEAD_RX.test(line)) {
+      if (collect.kind === 'contents') {
+        collect.subject.outline = joinLine(collect.subject.outline, line, collect.gap).slice(0, 5000);
+        collect.gap = false;
+      } else {
+        descriptions.set(collect.subject, `${descriptions.get(collect.subject) || ''} ${line}`.trim().slice(0, 5000));
+      }
       continue;
     }
     if (collect) collect = null;

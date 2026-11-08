@@ -13,6 +13,7 @@ import {
   myCoursesQuery,
   createSlotSchema,
   updateSlotSchema,
+  generateTimetableSchema,
   createEventSchema,
   updateEventSchema,
   listEventsQuery,
@@ -37,6 +38,7 @@ import {
   deleteSlot,
   publishTimetable,
   unpublishTimetable,
+  generateTimetable,
   myTimetable,
 } from '../controllers/timetableController.js';
 import { listEvents, createEvent, updateEvent, deleteEvent } from '../controllers/calendarController.js';
@@ -77,6 +79,8 @@ timetableRouter.get('/mine', authorize(STUDENT, TEACHER, HOD), myTimetable);
 timetableRouter.get('/semester/:semesterId', authorize(UNIVERSITY_HEAD, HOD), semesterParam, getSemesterTimetable);
 timetableRouter.post('/semester/:semesterId/publish', authorize(HOD), semesterParam, publishTimetable);
 timetableRouter.post('/semester/:semesterId/unpublish', authorize(HOD), semesterParam, unpublishTimetable);
+// Automatic timetable: periods of one hour between 09:00 and 13:00 by default. Always produces a draft.
+timetableRouter.post('/semester/:semesterId/generate', authorize(HOD), semesterParam, validate(generateTimetableSchema), generateTimetable);
 timetableRouter.post('/slots', authorize(HOD), validate(createSlotSchema), createSlot);
 timetableRouter.put('/slots/:id', authorize(HOD), idParam, validate(updateSlotSchema), updateSlot);
 timetableRouter.delete('/slots/:id', authorize(HOD), idParam, deleteSlot);

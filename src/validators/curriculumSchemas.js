@@ -51,6 +51,13 @@ export const offerSubjectsSchema = z.object({
   sections: z.array(z.string().trim().toUpperCase().min(1).max(10)).min(1).max(8).default(['A']),
 });
 export const withdrawSubjectSchema = z.object({ semester: objectId, program: objectId, code: codeField });
+// Make one semester match the curriculum. apply=false only shows the plan.
+export const matchSemesterSchema = z.object({
+  semester: objectId,
+  program: objectId.optional(),
+  apply: z.boolean().default(false),
+  replaceContents: z.boolean().default(false),
+});
 // Swap one offered subject for another one from the same semester of the curriculum.
 export const replaceSubjectSchema = z.object({
   semester: objectId,

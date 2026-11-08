@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Secrets: never commit these. Share server/.env.example instead.
+.env
+.env.*
+!.env.example
+
+# Uploaded files (student documents, bank slips, logos, course materials)
+uploads/*
+!uploads/.gitkeep
+
+# Logs and temporary files
+logs/
+*.log
+npm-debug.log*
+.npm/
+tmp/
+.cache/
+
+# Test and coverage output
+coverage/
+.nyc_output/
+
+# Editor and operating system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

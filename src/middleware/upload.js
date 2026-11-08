@@ -1,15 +1,28 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import crypto from 'crypto';
 import multer from 'multer';
 import { ApiError } from '../utils/apiHelpers.js';
 
-export const UPLOAD_ROOT = path.resolve('uploads');
+// On Vercel the project folder is READ-ONLY; only the temporary folder can be written, and it is wiped whenever the function
+// restarts. Uploads therefore work there but do NOT last (see docs/VERCEL.md). On your own computer or a normal server they
+// live in the uploads/ folder as before.
+export const UPLOAD_ROOT = process.env.VERCEL ? path.join(os.tmpdir(), 'uploads') : path.resolve('uploads');
+
+// Creating a folder must never stop the whole server from starting.
+function ensureDir(dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    console.warn(`Could not create the upload folder ${dir}: ${err.message}`);
+  }
+}
 export const BRANDING_DIR = path.join(UPLOAD_ROOT, 'branding');
 // PRIVATE_ROOT is NEVER served statically. Files here are only reachable through protected download routes.
 export const PRIVATE_ROOT = path.join(UPLOAD_ROOT, 'private');
-fs.mkdirSync(BRANDING_DIR, { recursive: true });
-fs.mkdirSync(PRIVATE_ROOT, { recursive: true });
+ensureDir(BRANDING_DIR);
+ensureDir(PRIVATE_ROOT);
 
 const ALLOWED = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp' };
 
@@ -76,7 +89,7 @@ const checkMagic = (req, _res, next) => {
 // privateUpload('materials') -> [multer, magic-number check]. Files land in uploads/private/<category>/.
 export const privateUpload = (category, { maxMB = 10, maxFiles = 5, field = 'files' } = {}) => {
   const dir = path.join(PRIVATE_ROOT, category);
-  fs.mkdirSync(dir, { recursive: true });
+  ensureDir(dir);
   const multerMw = multer({
     storage: multer.diskStorage({
       destination: (_req, _file, cb) => cb(null, dir),

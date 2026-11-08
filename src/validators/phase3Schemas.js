@@ -74,6 +74,19 @@ export const updateSlotSchema = z.object({
 });
 
 // ---------- Academic calendar ----------
+export const generateTimetableSchema = z
+  .object({
+    startTime: hhmm.default('09:00'),
+    endTime: hhmm.default('13:00'),
+    slotMinutes: z.number().int().min(30).max(120).default(60),
+    days: z.array(z.enum(DAYS)).min(1).max(7).default(['monday', 'tuesday', 'wednesday', 'thursday', 'friday']),
+    rooms: z.array(z.string().trim().min(1).max(50)).min(1).max(40),
+    // replace = start from an empty timetable, fill = keep the classes already on it and add what is missing
+    mode: z.enum(['replace', 'fill']).default('replace'),
+  })
+  .refine((v) => toMin(v.endTime) - toMin(v.startTime) >= v.slotMinutes, { message: 'The day must be at least one period long', path: ['endTime'] });
+
+// ---------- Academic calendar ----------
 export const createEventSchema = z
   .object({
     title: z.string().trim().min(2).max(150),
