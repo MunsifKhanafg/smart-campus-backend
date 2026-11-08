@@ -64,6 +64,9 @@ const CONTENTS_RX = /^(?:course\s+)?(?:contents?|topics|syllabus|outline)\s*[:\u
 const DESCRIPTION_RX = /^course\s+description\s*[:\u2013-]\s*(.*)$/i;
 const STOP_RX = /^(?:recommended|reference|text)?\s*books?\b|^bibliography\b|^aims?\s+and\s+objectives?\b|^learning\s+(?:outcomes?|objectives?)\b|^pre-?requisites?\b|^assessment\b|^evaluation\b|^references?\b|^course\s+(?:code|title|objectives?)\b|^lab(?:oratory)?\s+(?:contents?|manual)\b/i;
 
+// "Seventh (7th) Semester Specializations Elective Courses": the pool of elective courses of that semester.
+const ELECTIVE_HEAD_RX = /(?:^|[\s(])(\d{1,2})(?:st|nd|rd|th)\)?\s+semester\s+specializations?\s+elective/i;
+
 // "Specialization Elective - I" -> suffix I, so two placeholders with the same code stay two subjects.
 export const placeholderCode = (code, title) => {
   const c = String(code || '').toUpperCase();
@@ -88,13 +91,14 @@ export const parseCurriculumRules = (text) => {
   const programs = [];
   let program = null;
   let semester = null;
-  let missingCredit = 0;
+  const noCredit = new Set(); // subjects whose credit hours could not be read (set to 3)
   let orphan = 0;
   const closed = new Set(); // "programme|semester" whose table has ended; later mentions never add subjects
   const declared = new Map(); // "programme|semester" -> credit hours the document states
   const extras = new Map(); // "programme|semester" -> codes that were listed again but are not part of the scheme
   const descriptions = new Map(); // subject -> course description (used only if no contents were found)
   let lastSubject = null;
+  let electiveFor = null; // semester number whose elective course pool is being read right now
   let collect = null; // { subject, kind: 'contents' | 'description' }
 
   const keyOf = (p, s) => `${p.name}|${s.number}`;
@@ -139,12 +143,25 @@ export const parseCurriculumRules = (text) => {
     if (collect) collect = null;
     if (line.length > 160) continue;
 
+    // ----- the elective course pool of a semester -----
+    const pool = program && line.match(ELECTIVE_HEAD_RX);
+    if (pool) {
+      const number = Number(pool[1]);
+      if (number >= 1 && number <= 12) {
+        electiveFor = number;
+        lastSubject = null;
+        semester = program.semesters.find((s) => s.number === number) || (program.semesters.push({ number, subjects: [] }), program.semesters[program.semesters.length - 1]);
+        continue;
+      }
+    }
+
     // ----- semester heading -----
     const sem = line.match(SEMESTER_RX) || line.match(SEMESTER_RX_ORDINAL);
     if (sem) {
       const number = toSemesterNumber(sem[1]);
       if (number >= 1 && number <= 12) {
         lastSubject = null;
+        electiveFor = null;
         program = program || ensureProgram('Imported Program');
         semester = program.semesters.find((s) => s.number === number) || (program.semesters.push({ number, subjects: [] }), program.semesters[program.semesters.length - 1]);
         continue;
@@ -169,16 +186,17 @@ export const parseCurriculumRules = (text) => {
       if (!program || !semester) { orphan += 1; continue; }
       const key = keyOf(program, semester);
       const known = findSubject(program, course[1]);
+      const inPool = electiveFor !== null && electiveFor === semester.number;
 
-      if (closed.has(key) || known) {
-        // Already part of the scheme (detail page, change log, ...) -> only remember it so its contents can be attached.
-        if (known) lastSubject = known;
-        else {
-          lastSubject = null;
-          const list = extras.get(key) || [];
-          list.push(normalizeCode(course[1]));
-          extras.set(key, list);
-        }
+      // A subject of the scheme that appears again (detail page, change log): remember it so its contents can be attached.
+      // A pool elective that appears again keeps being updated, because the detail pages give the full title.
+      if (known && !(inPool && known.elective)) { lastSubject = known; continue; }
+      if (!known && closed.has(key) && !inPool) {
+        // Listed again after the scheme of studies, but not as an elective option: not a subject of this semester.
+        lastSubject = null;
+        const list = extras.get(key) || [];
+        list.push(normalizeCode(course[1]));
+        extras.set(key, list);
         continue;
       }
 
@@ -191,9 +209,17 @@ export const parseCurriculumRules = (text) => {
         i += 1;
       }
       if (credit === null && CREDIT_ONLY_RX.test(lines[i + 1] || '')) { credit = cleanCredit(lines[i + 1].match(CREDIT_ONLY_RX)[1]); lines[i + 1] = ''; }
-      if (credit === null) missingCredit += 1;
       const code = placeholderCode(normalizeCode(course[1]), title);
-      semester.subjects.push((lastSubject = { code, title, creditHours: credit ?? 3 }));
+      if (known) {
+        if (title.length >= known.title.length) known.title = title;
+        if (credit !== null) { known.creditHours = credit; noCredit.delete(known); }
+        lastSubject = known;
+        continue;
+      }
+      const added = { code, title, creditHours: credit ?? 3, ...(inPool ? { elective: true } : {}) };
+      if (credit === null) noCredit.add(added);
+      semester.subjects.push(added);
+      lastSubject = added;
       continue;
     }
 
@@ -212,7 +238,7 @@ export const parseCurriculumRules = (text) => {
   // ----- things the reviewer should know -----
   if (programs.length === 1 && programs[0].name === 'Imported Program') warnings.push('No "BS ..." programme heading was found, so the subjects were grouped under "Imported Program". Rename it below.');
   if (orphan) warnings.push(`${orphan} course line(s) appeared before any "Semester N" heading and were skipped.`);
-  if (missingCredit) warnings.push(`${missingCredit} subject(s) had no readable credit hours and were set to 3. Please check them.`);
+  if (noCredit.size) warnings.push(`${noCredit.size} subject(s) had no readable credit hours and were set to 3. Please check them.`);
   for (const p of programs) {
     for (const s of p.semesters) {
       const key = keyOf(p, s);
@@ -221,7 +247,7 @@ export const parseCurriculumRules = (text) => {
         const uniq = [...new Set(more)].filter((c) => !/XX/.test(c) && !s.subjects.some((x) => x.code === c));
         if (uniq.length) warnings.push(`${p.name}, semester ${s.number}: ${uniq.length} other course(s) (${uniq.slice(0, 6).join(', ')}${uniq.length > 6 ? ', ...' : ''}) are listed again after the scheme of studies, probably as elective options or course descriptions. They were NOT counted as subjects of this semester. Add one manually if a teacher must be assigned to it.`);
       }
-      const sum = s.subjects.reduce((n, x) => n + x.creditHours, 0);
+      const sum = s.subjects.filter((x) => !x.elective).reduce((n, x) => n + x.creditHours, 0);
       const want = declared.get(key);
       if (want && want !== sum) warnings.push(`${p.name}, semester ${s.number}: the subjects add up to ${sum} credit hours but the document says ${want}. A subject may be missing or have wrong credit hours.`);
     }
@@ -256,7 +282,7 @@ export const normalizeDraft = (raw) => {
         const credit = cleanCredit(sub?.creditHours);
         if (credit === null) warnings.push(`${name}, ${code}: credit hours were missing or invalid and were set to 3.`);
         const outline = String(sub?.outline || '').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim().slice(0, 5000);
-        sem.subjects.push({ code: code.slice(0, 20), title, creditHours: credit ?? 3, ...(outline ? { outline } : {}) }); // key only when present, so old drafts look the same
+        sem.subjects.push({ code: code.slice(0, 20), title, creditHours: credit ?? 3, ...(sub?.elective ? { elective: true } : {}), ...(outline ? { outline } : {}) }); // key only when present, so old drafts look the same
       }
     }
   }
@@ -291,6 +317,7 @@ Rules:
 - "number" is the semester number as an integer from 1 to 12. Put every subject under the semester it belongs to.
 - Include every subject of the SCHEME OF STUDIES (the semester-wise table): core, lab, general education, and the numbered elective slots such as "CS67XX Specialization Elective - I" (use the code with the suffix, e.g. CS67XX-I).
 - The scheme of studies decides which subjects belong to a semester. Later pages (course descriptions, change logs, lists of elective options, distribution tables) must NOT add more subjects to a semester. Use them only to fill "outline" of a subject that is already in the scheme.
+- Courses listed under a heading such as "Seventh (7th) Semester Specializations Elective Courses" are the ELECTIVE OPTIONS of that semester (the department offers only some of them). Include each one in that semester with "elective": true. Never mark scheme-of-studies subjects as elective.
 - Titles can wrap onto two lines; join them into one title. A code can also wrap (MATH- / 432).
 - creditHours is the total credit hours as an integer 1 to 6. For a format like 3(2+1) use 3.
 - "outline" is the course contents (the topics the subject covers) exactly as the document gives them, shortened if very long. Use "" when the document gives none. Never write contents yourself.
@@ -320,6 +347,7 @@ export const mergeChunk = (merged, part, warnings = []) => {
       for (const sub of s.subjects) {
         const same = have.subjects.find((x) => x.code === sub.code);
         if (same) { if (sub.outline && !same.outline) same.outline = sub.outline; }
+        else if (sub.elective) have.subjects.push(sub);
         else { const k = `${p.name}, semester ${s.number}`; dropped.set(k, [...(dropped.get(k) || []), sub.code]); }
       }
     }

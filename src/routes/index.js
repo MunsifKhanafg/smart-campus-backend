@@ -17,6 +17,7 @@ import {
   updateSettingsSchema,
   updateAccountSchema,
   resetPasswordSchema,
+  updateUserSchema,
 } from '../validators/schemas.js';
 import { login, me, changePassword, updateAccount } from '../controllers/authController.js';
 import { getPublicSettings, getSettings, updateSettings, uploadLogoFile } from '../controllers/settingsController.js';
@@ -28,7 +29,7 @@ import {
   setDepartmentStatus,
   assignHod,
 } from '../controllers/departmentController.js';
-import { createUser, listUsers, setUserActive, deleteUser, teacherProfile, resetPassword, changeUserEmail } from '../controllers/userController.js';
+import { createUser, listUsers, setUserActive, deleteUser, teacherProfile, resetPassword, changeUserEmail, updateUser } from '../controllers/userController.js';
 import { loginLimiter } from '../middleware/rateLimit.js';
 
 const { UNIVERSITY_HEAD, HOD } = ROLES;
@@ -65,8 +66,10 @@ userRouter.use(protect, authorize(UNIVERSITY_HEAD, HOD));
 userRouter.get('/', validate(listUsersQuery, 'query'), listUsers);
 userRouter.post('/', validate(createUserSchema), createUser);
 userRouter.patch('/:id/active', idParam, validate(userActiveSchema), setUserActive);
+// Fix a typing mistake in a teacher's name, email, phone or qualification (HOD: own department).
+userRouter.put('/:id', idParam, validate(updateUserSchema), updateUser);
 userRouter.delete('/:id', idParam, deleteUser);
 userRouter.get('/:id/profile', idParam, teacherProfile);
-// Access control: only the principal can set a temporary password for someone else.
-userRouter.post('/:id/reset-password', authorize(UNIVERSITY_HEAD), idParam, validate(resetPasswordSchema), resetPassword);
+// Forgotten password: the principal (anybody) or an HOD (teachers of their own department) sets a temporary password.
+userRouter.post('/:id/reset-password', idParam, validate(resetPasswordSchema), resetPassword);
 userRouter.patch('/:id/email', authorize(UNIVERSITY_HEAD), idParam, validate(z.object({ email: z.string().trim().toLowerCase().email().max(120) })), changeUserEmail);

@@ -5,6 +5,7 @@ import app from './app.js';
 import { sweepQuizzes } from './services/quizService.js';
 import { deliverDueAnnouncements } from './services/announcementService.js';
 import { autoPublishMerit } from './services/meritService.js';
+import { runFeeReminders } from './services/feeReminderService.js';
 import { checkEnv } from './config/validateEnv.js';
 
 // Refuse to start with an unsafe configuration (see config/validateEnv.js and docs/SECURITY_REVIEW.md).
@@ -46,7 +47,19 @@ const job = setInterval(() => {
   autoPublishMerit().catch((e) => console.error('Merit list job failed:', e.message)); // publishes on the merit list date
 }, 60 * 1000);
 
+// Every 30 minutes (and shortly after start-up): when an examination or promotion fee deadline (normal or late) is near or is today,
+// build the "students who have not paid yet" list and notify the HOD of the department and the finance officers.
+// Each reminder goes out once, even if the server restarts (see services/feeReminderService.js).
+const runReminders = () => {
+  if (!dbConnected()) return;
+  runFeeReminders().catch((e) => console.error('Fee reminder job failed:', e.message));
+};
+const reminderJob = setInterval(runReminders, 30 * 60 * 1000);
+const reminderStart = setTimeout(runReminders, 30 * 1000);
+
 const shutdown = () => {
+  clearInterval(reminderJob);
+  clearTimeout(reminderStart);
   clearInterval(job);
   server.close(() => mongoose.connection.close().then(() => process.exit(0)));
 };

@@ -19,6 +19,8 @@ const feeNoticeSchema = new mongoose.Schema(
     practicalFee: { type: Number, default: 0, min: 0 }, // per practical
     practicalLateFee: { type: Number, default: 0, min: 0 }, // per practical, only after the normal deadline
     maxPracticals: { type: Number, default: 3, min: 0, max: 6 },
+    // Automatic reminders to the HODs already sent for this notice (due_near, due_day, late_near, late_day), so each goes out once.
+    remindersSent: { type: [String], default: [] },
     requirements: { type: String, trim: true, maxlength: 3000, default: '' },
     requiredDocuments: [{ type: String, trim: true, lowercase: true, maxlength: 60 }],
     // Fee announcements create one notice per semester (and one more for the practical fee). They share a batch id.

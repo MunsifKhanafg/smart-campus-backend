@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { objectId } from './validate.js';
 import { FEE_TYPES, FEE_NOTICE_STATUS, PAYMENT_STATUS, REVIEW_STATUS } from '../config/constants.js';
+import { OFFICE_METHODS } from '../services/accountService.js';
 
 const date = z.coerce.date();
 
@@ -75,8 +76,31 @@ export const manualPaymentSchema = z
     notices: z.array(objectId).min(1).max(10).optional(), // older form: just the notice ids
     items: z.array(payLine).min(1).max(10).optional(), // with the number of practicals of each fee
     note: z.string().max(500).optional(),
+    // How the money reached the office. Cash needs nothing more; a bank, JazzCash or EasyPaisa payment needs its transaction number.
+    paidVia: z.enum(OFFICE_METHODS).default('cash'),
+    reference: z.string().trim().max(80).optional(),
+    payerName: z.string().trim().max(100).optional(),
+    payerPhone: z.string().trim().max(30).optional(),
+    // The requirements form filled at the counter: the student's mobile number (for the confirmation SMS) and the
+    // required documents the student handed over in person.
+    phone: z.string().trim().max(30).optional(),
+    receivedDocuments: z.array(z.string().trim().toLowerCase().max(60)).max(10).optional(),
   })
-  .refine((v) => v.items || v.notices, { message: 'Choose at least one fee', path: ['items'] });
+  .refine((v) => v.items || v.notices, { message: 'Choose at least one fee', path: ['items'] })
+  .refine((v) => v.paidVia === 'cash' || (v.reference && v.reference.length >= 3), { message: 'Enter the transaction / reference number', path: ['reference'] });
+
+// ---------- Payment accounts (bank, JazzCash, EasyPaisa) kept by the finance officer ----------
+const accountFields = {
+  title: z.string().trim().min(2).max(120),
+  number: z.string().trim().min(3).max(40),
+  bankName: z.string().trim().max(80).optional(),
+  iban: z.string().trim().max(40).optional(),
+  branch: z.string().trim().max(120).optional(),
+  instructions: z.string().trim().max(600).optional(),
+};
+export const accountSchema = z.object({ type: z.enum(['bank', 'jazzcash', 'easypaisa']), ...accountFields });
+export const accountUpdateSchema = z.object(accountFields).partial(); // the type never changes
+export const accountActiveSchema = z.object({ active: z.boolean() });
 
 // ---------- Bank transfer ----------
 export const bankInfoSchema = z.object({
@@ -88,9 +112,14 @@ export const bankInfoSchema = z.object({
   instructions: z.string().trim().max(600).default(''),
 });
 // Sent as multipart/form-data (there is a proof file), so every field arrives as text. `items` is a JSON list.
+// accountId = the account the student paid into. For a bank account the student gives THEIR bank name; for a JazzCash or
+// EasyPaisa account they give THEIR mobile number. The server checks which one is needed (services/accountService.js).
 export const bankSubmitSchema = z.object({
   items: z.string().min(2).max(2000),
-  bankName: z.string().trim().min(2).max(80),
+  accountId: objectId,
+  bankName: z.string().trim().max(80).optional(),
+  senderNumber: z.string().trim().max(20).optional(),
+  phone: z.string().trim().max(30).optional(), // the student's own mobile number for the confirmation SMS (saved on the account)
   reference: z.string().trim().min(3).max(80),
   transferDate: date,
   note: z.string().max(500).optional(),
@@ -120,5 +149,29 @@ export const reviewSchema = z
 export const documentsQuery = z.object({ status: z.enum(Object.values(REVIEW_STATUS)).optional() });
 
 export const requestAdmissionSchema = z.object({ examination: objectId });
+// The finance office (or an HOD) applies at the counter for a student who cannot use the online system.
+// `phone` is the mobile number the student gave at the counter (saved, and used for the SMS updates).
+export const requestAdmissionForSchema = z.object({ student: objectId, examination: objectId, phone: z.string().trim().max(30).optional() });
 export const admissionsQuery = z.object({ examination: objectId.optional(), status: z.enum(Object.values(REVIEW_STATUS)).optional() });
 export const courseAdmissionQuery = z.object({ examination: objectId });
+
+// ---------- Fee announcement (many semesters / one exam in one go) ----------
+const amount = z.number().min(0).max(10000000).default(0);
+const announceItem = z.object({
+  semester: objectId,
+  examination: objectId.nullable().optional(), // set = this one individual exam; empty = the semester's examinations in general
+  examFee: amount, // theory examination fee
+  examLateFee: amount,
+  practicalFee: amount, // practical exam fee (own charges)
+  practicalLateFee: amount,
+  promotionFee: amount, // semester promotion fee
+  promotionLateFee: amount,
+  startDate: date,
+  dueDate: date,
+  lateDueDate: date.nullable().optional(),
+  requirements: z.string().max(3000).optional(),
+  requiredDocuments: z.array(z.string().trim().toLowerCase().min(2).max(60)).max(10).optional(),
+});
+export const announceFeesSchema = z.object({ items: z.array(announceItem).min(1).max(40) });
+export const feeExamsQuery = z.object({ semester: objectId });
+export const promotionQuery = z.object({ department: objectId.optional(), semester: objectId.optional() });

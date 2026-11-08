@@ -69,6 +69,19 @@ const applicationSchema = new mongoose.Schema(
     reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     reviewedAt: Date,
     enrolledUser: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+
+    // Written when the merit list is published (services/meritService.js): the frozen rank inside the department and,
+    // for the top candidates, the interview call the applicant reads on the tracking page.
+    merit: {
+      rank: { type: Number, default: null },
+      called: { type: Boolean, default: false },
+      interviewDate: { type: Date, default: null },
+      interviewTime: { type: String, default: '' },
+      venue: { type: String, default: '' },
+      message: { type: String, default: '' },
+      notifiedAt: { type: Date, default: null },
+      emailStatus: { type: String, enum: ['none', 'sent', 'failed'], default: 'none' },
+    },
   },
   { timestamps: true }
 );

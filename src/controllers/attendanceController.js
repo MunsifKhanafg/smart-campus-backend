@@ -111,6 +111,65 @@ export const myAttendance = asyncHandler(async (req, res) => {
   sendSuccess(res, { minPercent, rows });
 });
 
+// Session history of one course: one line per day attendance was taken, with that day's totals.
+export const courseSessions = asyncHandler(async (req, res) => {
+  const course = await getCourseFor(req.user, req.params.courseId, 'staff');
+  const docs = await Attendance.find({ course: course._id }).select('date records.status').sort({ date: -1 }).lean();
+  sendSuccess(
+    res,
+    docs.map((d) => {
+      const c = { present: 0, absent: 0, leave: 0 };
+      for (const r of d.records) c[r.status] = (c[r.status] || 0) + 1;
+      return { date: d.date, ...c, total: d.records.length };
+    })
+  );
+});
+
+// A teacher's own classes with their attendance figures (students, sessions held, average, who is below the limit,
+// whether today's attendance is already taken). Powers the teacher's Attendance page.
+export const myClasses = asyncHandler(async (req, res) => {
+  const { allowLeave, minPercent } = await rulesOf();
+  const courses = await Course.find({ teacher: req.user._id, status: 'active' })
+    .populate('semester', 'name number academicYear status')
+    .select('code title section creditHours semester')
+    .sort({ code: 1 })
+    .lean();
+  const ids = courses.map((c) => c._id);
+  const [counts, sessions] = await Promise.all([
+    attendanceCounts({ courseIds: ids }),
+    Attendance.aggregate([{ $match: { course: { $in: ids } } }, { $group: { _id: '$course', sessions: { $sum: 1 }, last: { $max: '$date' } } }]),
+  ]);
+  const sess = new Map(sessions.map((s) => [String(s._id), s]));
+  const today = dayStart(new Date()).getTime();
+
+  const rows = [];
+  for (const c of courses) {
+    let sum = 0;
+    let n = 0;
+    let low = 0;
+    for (const [key, cnt] of counts) {
+      if (!key.startsWith(`${c._id}:`)) continue;
+      const pct = attendancePercent(cnt, allowLeave);
+      if (pct === null) continue;
+      sum += pct;
+      n += 1;
+      if (pct < minPercent) low += 1;
+    }
+    const s = sess.get(String(c._id));
+    rows.push({
+      course: { _id: c._id, code: c.code, title: c.title, section: c.section, creditHours: c.creditHours },
+      semester: c.semester,
+      students: (await enrolledStudentIds(c._id)).length,
+      sessions: s?.sessions || 0,
+      lastDate: s?.last || null,
+      markedToday: !!s && dayStart(s.last).getTime() === today,
+      averagePercent: n ? round2(sum / n) : null,
+      belowLimit: low,
+    });
+  }
+  sendSuccess(res, { minPercent, rows });
+});
+
 // HOD (own department) or head (any): average attendance of every course.
 export const departmentSummary = asyncHandler(async (req, res) => {
   const { allowLeave, minPercent } = await rulesOf();

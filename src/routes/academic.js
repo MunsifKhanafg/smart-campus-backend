@@ -35,9 +35,11 @@ import {
   assignTeacher,
   setCourseStatus,
   deleteCourse,
+  syncCurriculum,
+  syncSemesterCurriculum,
 } from '../controllers/courseController.js';
 import { privateUpload } from '../middleware/upload.js';
-import { programsQuery, draftSchema, boardQuery, assignSubjectSchema, generateCoursesSchema } from '../validators/curriculumSchemas.js';
+import { programsQuery, draftSchema, boardQuery, assignSubjectSchema, generateCoursesSchema, offerSubjectsSchema, withdrawSubjectSchema, replaceSubjectSchema } from '../validators/curriculumSchemas.js';
 import {
   createImport,
   listImports,
@@ -52,7 +54,7 @@ import {
   setProgramStatus,
   resyncProgram,
 } from '../controllers/curriculumController.js';
-import { board, assignSubject, generateCourses } from '../controllers/teachingController.js';
+import { board, assignSubject, generateCourses, offerSubjects, withdrawSubject, replaceSubject } from '../controllers/teachingController.js';
 
 const { UNIVERSITY_HEAD, HOD, TEACHER, FINANCE_OFFICER } = ROLES;
 const idParam = validate(z.object({ id: objectId }), 'params');
@@ -79,6 +81,9 @@ export const courseRouter = Router();
 courseRouter.use(protect);
 courseRouter.get('/', authorize(UNIVERSITY_HEAD, HOD, TEACHER), validate(listCoursesQuery, 'query'), listCourses);
 courseRouter.post('/', authorize(HOD), validate(createCourseSchema), createCourse);
+// Bring the official subject names and course contents of the BS curriculum into the classes (one class, or a whole semester).
+courseRouter.post('/sync-curriculum', authorize(HOD), validate(z.object({ semester: objectId })), syncSemesterCurriculum);
+courseRouter.post('/:id/sync-curriculum', authorize(HOD), idParam, validate(z.object({ overwrite: z.boolean().optional() })), syncCurriculum);
 courseRouter.get('/:id', authorize(UNIVERSITY_HEAD, HOD, TEACHER), idParam, getCourse);
 courseRouter.put('/:id', authorize(HOD), idParam, validate(updateCourseSchema), updateCourse);
 courseRouter.patch('/:id/teacher', authorize(HOD), idParam, validate(assignTeacherSchema), assignTeacher);
@@ -110,3 +115,7 @@ teachingRouter.use(protect);
 teachingRouter.get('/board', authorize(UNIVERSITY_HEAD, HOD), validate(boardQuery, 'query'), board);
 teachingRouter.post('/generate', authorize(HOD), validate(generateCoursesSchema), generateCourses);
 teachingRouter.post('/assign', authorize(HOD), validate(assignSubjectSchema), assignSubject);
+// Offer only some subjects of a semester, stop offering one, or swap one for another (the old class leaves the timetable).
+teachingRouter.post('/offer', authorize(HOD), validate(offerSubjectsSchema), offerSubjects);
+teachingRouter.post('/withdraw', authorize(HOD), validate(withdrawSubjectSchema), withdrawSubject);
+teachingRouter.post('/replace', authorize(HOD), validate(replaceSubjectSchema), replaceSubject);

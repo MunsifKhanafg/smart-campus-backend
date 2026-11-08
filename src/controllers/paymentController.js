@@ -10,6 +10,7 @@ import { ApiError, asyncHandler, sendSuccess } from '../utils/apiHelpers.js';
 import { logAudit } from '../utils/audit.js';
 import { notifyUsers } from '../utils/notify.js';
 import { buildPaymentItems, markPaid, supersedePending } from '../services/paymentService.js';
+import { buildRequirements, assertRequirementsMet, resolvePhone } from '../services/requirementService.js';
 import { createCheckout, retrieveCheckout, verifyStripeSignature, refundPayment, providerName } from '../services/paymentGateway.js';
 import { renderReceipt } from '../services/pdfService.js';
 import { ROLES, PAYMENT_STATUS, REVIEW_STATUS } from '../config/constants.js';
@@ -29,6 +30,13 @@ export const checkout = asyncHandler(async (req, res) => {
   const cart = await FeeCart.findOne({ student: req.user._id });
   if (!cart?.items.length) throw ApiError.badRequest('Your cart is empty');
 
+  // The student fills the requirements BEFORE paying: mobile number (for the confirmation SMS) and the documents the fees ask
+  // for. They are stored on the payment, in the finance officer's file.
+  const cartNotices = await FeeNotice.find({ _id: { $in: cart.items.map((i) => i.notice) } });
+  const phone = await resolvePhone(req.user._id, req.body?.phone);
+  const requirements = await buildRequirements({ studentId: req.user._id, notices: cartNotices, phone });
+  assertRequirementsMet(requirements);
+
   // Prices are calculated here, on the server, from the fee notices. Nothing is taken from the browser.
   const { items, totalAmount, currency } = await buildPaymentItems({
     studentId: req.user._id,
@@ -45,6 +53,7 @@ export const checkout = asyncHandler(async (req, res) => {
     currency,
     method: 'gateway',
     provider: providerName() === 'stripe' ? 'stripe' : 'mock',
+    requirements,
   });
   const checkoutInfo = await createCheckout({ payment, studentEmail: req.user.email });
   payment.provider = checkoutInfo.provider;
@@ -138,6 +147,23 @@ export const manualPayment = asyncHandler(async (req, res) => {
   const lines = req.body.items || req.body.notices.map((n) => ({ notice: n, practicals: 0 }));
   const { items, totalAmount, currency } = await buildPaymentItems({ studentId: profile.user, profile, lines });
 
+  // The officer fills the same requirements form for the student at the counter: the mobile number for the SMS, and a tick for
+  // every required document the student handed over in person.
+  const notices = await FeeNotice.find({ _id: { $in: lines.map((l) => l.notice) } });
+  const phone = await resolvePhone(profile.user, req.body.phone);
+  const requirements = await buildRequirements({ studentId: profile.user, notices, phone, receivedAtOffice: req.body.receivedDocuments || [], filledBy: req.user._id });
+  assertRequirementsMet(requirements, true);
+
+  // A bank / JazzCash / EasyPaisa payment brought to the office needs its transaction number, and one transaction cannot be
+  // recorded twice (not here, and not as a transfer a student submitted online).
+  const paidVia = req.body.paidVia || 'cash';
+  if (paidVia !== 'cash') {
+    const same = new RegExp(`^${escapeRx(req.body.reference)}$`, 'i');
+    if (await Payment.exists({ status: { $in: [PAYMENT_STATUS.PENDING, PAYMENT_STATUS.PAID] }, $or: [{ 'office.reference': same }, { 'bank.reference': same }] })) {
+      throw ApiError.conflict('This transaction number is already recorded for another payment');
+    }
+  }
+
   const payment = await Payment.create({
     student: profile.user,
     department: profile.department,
@@ -146,8 +172,10 @@ export const manualPayment = asyncHandler(async (req, res) => {
     currency,
     method: 'manual',
     provider: null,
+    requirements,
     collectedBy: req.user._id,
     manualNote: req.body.note,
+    office: { paidVia, reference: req.body.reference || '', payerName: req.body.payerName || '', payerPhone: req.body.payerPhone || '' },
   });
   const paid = await markPaid(payment._id);
   logAudit(req, 'payment.manual', 'Payment', paid._id, { total: totalAmount, student: String(profile.user), receipt: paid.receiptNumber });

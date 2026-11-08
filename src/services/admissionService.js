@@ -4,12 +4,13 @@ import StudentDocument from '../models/StudentDocument.js';
 import Assignment from '../models/Assignment.js';
 import Submission from '../models/Submission.js';
 import Result from '../models/Result.js';
+import Payment from '../models/Payment.js';
 import Semester from '../models/Semester.js';
 import UniversitySettings from '../models/UniversitySettings.js';
 import { attendanceCounts, emptyCounts, attendancePercent } from './attendanceService.js';
 import { paidNoticeIds } from './feeService.js';
 import { studentCourseIds } from './accessService.js';
-import { FEE_NOTICE_STATUS, REVIEW_STATUS, RESULT_STATUS } from '../config/constants.js';
+import { FEE_NOTICE_STATUS, REVIEW_STATUS, RESULT_STATUS, PAYMENT_STATUS } from '../config/constants.js';
 
 // ===== Admission eligibility. Pure rules -> check lines (unit tested through summarizeChecks) =====
 export const summarizeChecks = (checks) => {
@@ -61,7 +62,10 @@ export const evaluateAdmission = async ({ studentId, profile, exam }) => {
     const required = [...new Set(notices.flatMap((n) => n.requiredDocuments))];
     if (required.length) {
       const approved = await StudentDocument.find({ student: studentId, status: REVIEW_STATUS.APPROVED }).distinct('type');
-      const missing = required.filter((t) => !approved.includes(t));
+      // A student who pays at the office hands the papers over in person. The finance officer ticks "received at the office" on that payment.
+      const office = await Payment.find({ student: studentId, status: PAYMENT_STATUS.PAID, 'items.notice': { $in: notices.map((n) => n._id) } }).select('requirements.documents').lean();
+      const handedIn = new Set(office.flatMap((p) => (p.requirements?.documents || []).filter((d) => d.status === 'received_at_office').map((d) => d.type)));
+      const missing = required.filter((t) => !approved.includes(t) && !handedIn.has(t));
       checks.push({
         key: 'documents',
         label: 'Required documents approved',

@@ -14,13 +14,16 @@ export const APPLICATION_STATUS = {
 };
 
 const DAY = 24 * 60 * 60 * 1000;
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const longDate = (d) => `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`; // 1 June 2026
 
 // Is the portal accepting applications right now? Dates are whole days (UTC). The closing day itself still counts.
 //   off      = the switch is off
 //   upcoming = the switch is on but the opening date has not come yet
 //   closed   = the closing day has passed
 //   open     = accepting applications
-export const portalState = (settings, now = new Date()) => {
+export const portalState = (settings, nowInput = new Date()) => {
+  const now = new Date(nowInput); // a Date or a timestamp
   const p = settings?.admissionPortal || {};
   const start = p.startDate ? new Date(p.startDate) : null;
   const deadline = p.deadline ? new Date(p.deadline) : null;
@@ -33,10 +36,10 @@ export const portalState = (settings, now = new Date()) => {
     closedReason = 'Admissions are not open at the moment';
   } else if (start && now < start) {
     status = 'upcoming';
-    closedReason = `Applications open on ${start.toISOString().slice(0, 10)}`;
+    closedReason = `Applications open on ${longDate(start)}`;
   } else if (deadline && now.getTime() >= deadline.getTime() + DAY) {
     status = 'closed';
-    closedReason = `Applications closed on ${deadline.toISOString().slice(0, 10)}`;
+    closedReason = `Applications closed on ${longDate(deadline)}`;
   }
 
   // The merit list is NEVER public while people can still apply. It becomes visible only when ALL of these are true:

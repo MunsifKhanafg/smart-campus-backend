@@ -8,6 +8,7 @@ const subjectSchema = new mongoose.Schema(
     title: { type: String, trim: true, maxlength: 150 },
     creditHours: { type: Number, min: 1, max: 6, default: 3 },
     outline: { type: String, trim: true, maxlength: 5000, default: '' },
+    elective: { type: Boolean, default: false },
   },
   { _id: false }
 );

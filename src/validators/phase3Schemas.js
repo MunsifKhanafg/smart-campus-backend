@@ -27,7 +27,10 @@ export const createStudentSchema = z.object({
   ...profileFields,
 });
 
+// The HOD corrects typing mistakes here, so nobody has to delete a student and add them again.
 export const updateStudentSchema = z.object({
+  email: z.string().trim().toLowerCase().email().max(120).optional(),
+  rollNumber: z.string().trim().min(2).max(30).optional(),
   name: z.string().trim().min(2).max(100).optional(),
   phone: z.string().max(30).optional(),
   ...profileFields,

@@ -138,6 +138,36 @@ export const teacherProfile = asyncHandler(async (req, res) => {
   });
 });
 
+// Corrects a teacher's (or, for the principal, any staff member's) name, email, phone or qualification after a typing
+// mistake, so nobody has to delete and re-create the account. An HOD can edit teachers of their own department only.
+// Students are corrected from the Students page. The email must stay unique.
+export const updateUser = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.params.id);
+  if (!user) throw ApiError.notFound('User not found');
+  if (user.role === ROLES.UNIVERSITY_HEAD) throw ApiError.forbidden('Use Account to change your own details');
+  if (user.role === ROLES.STUDENT) throw ApiError.badRequest('Students are corrected from the Students page');
+  if (req.user.role !== ROLES.UNIVERSITY_HEAD) {
+    assertDepartmentAccess(req.user, user.department);
+    if (user.role !== ROLES.TEACHER) throw ApiError.forbidden('An HOD can correct the details of teachers of their own department only');
+  }
+
+  const { name, email, phone, qualification } = req.body;
+  const changed = [];
+  if (email !== undefined && email !== user.email) {
+    if (await User.exists({ email, _id: { $ne: user._id } })) throw ApiError.conflict('Another account already uses this email');
+    user.email = email;
+    changed.push('email');
+  }
+  if (name !== undefined && name !== user.name) { user.name = name; changed.push('name'); }
+  if (phone !== undefined && phone !== user.phone) { user.phone = phone; changed.push('phone'); }
+  if (qualification !== undefined && qualification !== user.qualification) { user.qualification = qualification; changed.push('qualification'); }
+  if (!changed.length) throw ApiError.badRequest('Nothing was changed');
+  await user.save();
+
+  logAudit(req, 'user.update', 'User', user._id, { role: user.role, fields: changed });
+  sendSuccess(res, user, `Saved (${changed.join(', ')}).${changed.includes('email') ? ' The person must now sign in with the new email' : ''}`);
+});
+
 // The principal changes the login email of a staff member or student (for example after a typing mistake).
 // The email must be unique. The principal's own account is changed from the Account page.
 export const changeUserEmail = asyncHandler(async (req, res) => {
@@ -153,15 +183,19 @@ export const changeUserEmail = asyncHandler(async (req, res) => {
   sendSuccess(res, user, 'Email changed. The person must now sign in with the new email');
 });
 
-// The principal sets a temporary password for a locked-out staff member or student.
-// The person must choose their own password at the next login. The principal's own account is excluded.
+// A staff member forgot their password. The principal can set a temporary one for anybody except the principal; an HOD can do it for
+// the teachers of their own department. The person must choose their own password at the next login.
 export const resetPassword = asyncHandler(async (req, res) => {
   const user = await User.findById(req.params.id).select('+password');
   if (!user) throw ApiError.notFound('User not found');
   if (user.role === ROLES.UNIVERSITY_HEAD) throw ApiError.forbidden('Use Account to change your own password');
+  if (req.user.role !== ROLES.UNIVERSITY_HEAD) {
+    assertDepartmentAccess(req.user, user.department);
+    if (user.role !== ROLES.TEACHER) throw ApiError.forbidden('An HOD can set a temporary password for teachers of their own department only');
+  }
   user.password = req.body.temporaryPassword;
   user.mustChangePassword = true;
   await user.save(); // the model hashes it and invalidates the person's open sessions
   logAudit(req, 'user.reset_password', 'User', user._id, { role: user.role });
-  sendSuccess(res, null, 'Temporary password set. The user must change it at the next login');
+  sendSuccess(res, null, 'Temporary password set. Give it to the person. They must choose their own password at the next login');
 });

@@ -10,6 +10,8 @@ const subjectSchema = new mongoose.Schema(
     creditHours: { type: Number, required: true, min: 1, max: 6, default: 3 },
     // Course contents (topics covered). Copied into the class when it is created, so the teacher receives it on assignment.
     outline: { type: String, trim: true, maxlength: 5000, default: '' },
+    // An elective OPTION (from the list "Semester N Specializations Elective Courses"). The HOD offers only some of them.
+    elective: { type: Boolean, default: false },
   },
   { _id: false }
 );

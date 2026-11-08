@@ -7,6 +7,7 @@ const subject = z.object({
   title: z.string().trim().min(2).max(150),
   creditHours: z.coerce.number().int().min(1).max(6),
   outline: z.string().max(5000).optional(), // course contents; without this line zod would silently drop it when the Head edits the draft
+  elective: z.boolean().optional(), // an elective option the HOD may offer; also dropped silently if missing here
 });
 
 const semester = z.object({
@@ -39,4 +40,22 @@ export const assignSubjectSchema = z.object({
   code: z.string().trim().min(2).max(20),
   section: z.string().trim().toUpperCase().max(10).default('A'),
   teacher: objectId.nullable(),
+});
+
+// ---------- HOD: choose WHICH subjects of a semester are offered (for example 5 of the 21 subjects of semester 7) ----------
+const codeField = z.string().trim().min(2).max(20);
+export const offerSubjectsSchema = z.object({
+  semester: objectId,
+  program: objectId,
+  codes: z.array(codeField).min(1).max(40),
+  sections: z.array(z.string().trim().toUpperCase().min(1).max(10)).min(1).max(8).default(['A']),
+});
+export const withdrawSubjectSchema = z.object({ semester: objectId, program: objectId, code: codeField });
+// Swap one offered subject for another one from the same semester of the curriculum.
+export const replaceSubjectSchema = z.object({
+  semester: objectId,
+  program: objectId,
+  from: codeField,
+  to: codeField,
+  keepTeacher: z.boolean().default(true),
 });

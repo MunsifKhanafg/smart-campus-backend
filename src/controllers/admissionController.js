@@ -12,6 +12,8 @@ import { notifyUsers } from '../utils/notify.js';
 import { getCourseFor, enrolledStudentIds, studentCourseIds } from '../services/accessService.js';
 import { evaluateAdmission, loadExamWithPapers } from '../services/admissionService.js';
 import { renderAdmitCard } from '../services/pdfService.js';
+import { smsToUser } from '../services/smsService.js';
+import { resolvePhone } from '../services/requirementService.js';
 import { ROLES, EXAM_STATUS, REVIEW_STATUS } from '../config/constants.js';
 
 const loadPublishedExam = async (id) => {
@@ -23,16 +25,17 @@ const loadPublishedExam = async (id) => {
 
 // ---------- Student ----------
 // Every published examination of the student's semester, with the live state of each requirement.
-export const myAdmissions = asyncHandler(async (req, res) => {
-  const profile = await StudentProfile.findOne({ user: req.user._id });
-  if (!profile?.semester) return sendSuccess(res, []);
+// Every published examination of one student's semester, with the live state of each requirement.
+// Used by the student (My exams) and by the finance office (applying for a student at the counter).
+const admissionRows = async (studentId, profile) => {
+  if (!profile?.semester) return [];
   const exams = await Examination.find({ semester: profile.semester, status: EXAM_STATUS.PUBLISHED }).populate('papers.course', 'code title').sort({ startDate: 1 });
-  const admissions = await ExaminationAdmission.find({ student: req.user._id, examination: { $in: exams.map((e) => e._id) } });
+  const admissions = await ExaminationAdmission.find({ student: studentId, examination: { $in: exams.map((e) => e._id) } });
   const byExam = new Map(admissions.map((a) => [String(a.examination), a]));
 
   const rows = [];
   for (const exam of exams) {
-    const live = await evaluateAdmission({ studentId: req.user._id, profile, exam });
+    const live = await evaluateAdmission({ studentId, profile, exam });
     rows.push({
       examination: { _id: exam._id, name: exam.name, type: exam.type, startDate: exam.startDate, endDate: exam.endDate },
       admission: byExam.get(String(exam._id)) || null,
@@ -41,27 +44,67 @@ export const myAdmissions = asyncHandler(async (req, res) => {
       reason: live.reason,
     });
   }
-  sendSuccess(res, rows);
+  return rows;
+};
+
+export const myAdmissions = asyncHandler(async (req, res) => {
+  const profile = await StudentProfile.findOne({ user: req.user._id });
+  sendSuccess(res, await admissionRows(req.user._id, profile));
 });
 
-export const requestAdmission = asyncHandler(async (req, res) => {
-  const profile = await StudentProfile.findOne({ user: req.user._id });
-  if (!profile?.semester) throw ApiError.badRequest('You are not placed in a semester yet');
-  const exam = await loadPublishedExam(req.body.examination);
-  if (String(exam.semester) !== String(profile.semester)) throw ApiError.forbidden('This examination is not for your semester');
+// Creates (or reopens) the admission request. The student asks online, or the office asks for a student who cannot.
+// Either way the HOD still reviews it and the server re-checks every rule at approval.
+const submitRequest = async ({ student, profile, examId, requestedBy = null }) => {
+  if (!profile?.semester) throw ApiError.badRequest('The student is not placed in a semester yet');
+  const exam = await loadPublishedExam(examId);
+  if (String(exam.semester) !== String(profile.semester)) throw ApiError.forbidden('This examination is not for the student\'s semester');
 
-  const existing = await ExaminationAdmission.findOne({ student: req.user._id, examination: exam._id });
-  if (existing?.status === REVIEW_STATUS.APPROVED) throw ApiError.conflict('Your admission is already approved');
+  const existing = await ExaminationAdmission.findOne({ student: student._id, examination: exam._id });
+  if (existing?.status === REVIEW_STATUS.APPROVED) throw ApiError.conflict('The admission is already approved');
 
-  const live = await evaluateAdmission({ studentId: req.user._id, profile, exam });
+  const live = await evaluateAdmission({ studentId: student._id, profile, exam });
   const admission = await ExaminationAdmission.findOneAndUpdate(
-    { student: req.user._id, examination: exam._id },
-    { $set: { department: profile.department, semester: profile.semester, status: REVIEW_STATUS.PENDING, checks: live.checks, reason: live.reason, requestedAt: new Date() } },
+    { student: student._id, examination: exam._id },
+    { $set: { department: profile.department, semester: profile.semester, status: REVIEW_STATUS.PENDING, checks: live.checks, reason: live.reason, requestedAt: new Date(), requestedBy, atOffice: !!requestedBy } },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
   const dept = await Department.findById(profile.department).select('hod');
-  if (dept?.hod) await notifyUsers([dept.hod], { title: 'Admission request', message: `${req.user.name} requested admission for ${exam.name}`, type: 'admission', link: '/admissions' });
+  if (dept?.hod && String(dept.hod) !== String(requestedBy)) {
+    await notifyUsers([dept.hod], { title: 'Admission request', message: `${student.name} requested admission for ${exam.name}${requestedBy ? ' (applied at the office)' : ''}`, type: 'admission', link: '/admissions' });
+  }
+  return { admission, exam };
+};
+
+export const requestAdmission = asyncHandler(async (req, res) => {
+  const profile = await StudentProfile.findOne({ user: req.user._id });
+  const { admission } = await submitRequest({ student: req.user, profile, examId: req.body.examination });
   sendSuccess(res, admission, 'Admission request sent', 201);
+});
+
+// ---------- Finance office / HOD: for a student who comes to the office ----------
+// A student without an online account (or who cannot use it) pays at the office. The office also applies for the exam
+// admission, so the student never has to log in. An HOD can do this for students of their own department only.
+const loadStudentFor = async (user, studentId) => {
+  const [profile, student] = await Promise.all([StudentProfile.findOne({ user: studentId }), User.findById(studentId).select('name')]);
+  if (!profile || !student) throw ApiError.notFound('Student not found');
+  if (user.role === ROLES.HOD) assertDepartmentAccess(user, profile.department);
+  return { student, profile };
+};
+
+export const studentAdmissions = asyncHandler(async (req, res) => {
+  const { profile } = await loadStudentFor(req.user, req.params.id);
+  sendSuccess(res, await admissionRows(req.params.id, profile));
+});
+
+export const requestAdmissionFor = asyncHandler(async (req, res) => {
+  const { student, profile } = await loadStudentFor(req.user, req.body.student);
+  // The office types the student's mobile number at the counter. It is saved on the account, so the SMS below reaches the student.
+  if (req.body.phone) await resolvePhone(student._id, req.body.phone);
+  const { admission, exam } = await submitRequest({ student, profile, examId: req.body.examination, requestedBy: req.user._id });
+  await notifyUsers([student._id], { title: 'Examination admission requested', message: `The office applied for your admission to ${exam.name}. You can follow it under Examinations.`, type: 'admission', link: '/exams' });
+  const smsStatus = await smsToUser(student._id, `Admission request for ${exam.name} (Roll No ${profile.rollNumber}) was submitted by the university office. You will get an SMS when the HOD decides.`);
+  logAudit(req, 'admission.request_for', 'ExaminationAdmission', admission._id, { student: String(student._id), by: req.user.name });
+  sendSuccess(res, { ...admission.toObject(), smsStatus }, 'Admission requested for the student. The HOD will review it', 201);
 });
 
 // ---------- HOD / head ----------
@@ -103,6 +146,11 @@ export const reviewAdmission = asyncHandler(async (req, res) => {
   await admission.save();
 
   await notifyUsers([admission.student], { title: `Admission ${req.body.status.replace('_', ' ')}`, message: `${exam.name}: ${admission.reason}`, type: 'admission', link: '/exams' });
+  // A student who applied at the office may never log in, so the decision is also sent by SMS.
+  if (admission.atOffice) {
+    const decision = req.body.status === REVIEW_STATUS.APPROVED ? 'approved. Collect your admit card at the university office' : `${req.body.status === REVIEW_STATUS.REJECTED ? 'rejected' : 'needs correction'}. ${admission.remarks}`;
+    await smsToUser(admission.student, `${exam.name} (Roll No ${profile?.rollNumber || '-'}): admission ${decision}`);
+  }
   logAudit(req, 'admission.review', 'ExaminationAdmission', admission._id, { status: admission.status });
   sendSuccess(res, admission, 'Admission reviewed');
 });
@@ -113,7 +161,8 @@ export const downloadAdmitCard = asyncHandler(async (req, res) => {
   if (!admission) throw ApiError.notFound('Admission not found');
   if (req.user.role === ROLES.STUDENT) {
     if (String(admission.student) !== String(req.user._id)) throw ApiError.forbidden();
-  } else {
+  } else if (req.user.role !== ROLES.FINANCE_OFFICER) {
+    // The finance office prints the admit card for a student who applied at the counter.
     assertDepartmentAccess(req.user, admission.department);
   }
   if (admission.status !== REVIEW_STATUS.APPROVED) throw ApiError.badRequest('The admit card is available only after your admission is approved');

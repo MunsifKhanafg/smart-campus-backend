@@ -41,10 +41,21 @@ const paymentSchema = new mongoose.Schema(
     // Manual (office) collection, and the officer who pressed Receive on a bank transfer
     collectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     manualNote: { type: String, maxlength: 500 },
-    // Bank transfer details typed in by the student
+    // How the money reached the office (method = 'manual'): cash, or a bank / JazzCash / EasyPaisa payment with its transaction number.
+    office: {
+      paidVia: { type: String, enum: ['cash', 'bank', 'jazzcash', 'easypaisa'] },
+      reference: { type: String, trim: true, maxlength: 80 },
+      payerName: { type: String, trim: true, maxlength: 100 },
+      payerPhone: { type: String, trim: true, maxlength: 30 },
+    },
+    // Transfer details typed in by the student (bank transfer, JazzCash or EasyPaisa). method = 'bank' covers all three.
     bank: {
-      bankName: { type: String, trim: true, maxlength: 80 },
-      reference: { type: String, trim: true, maxlength: 80 }, // transaction id / reference number shown on the bank slip
+      channel: { type: String, enum: ['bank', 'jazzcash', 'easypaisa'] },
+      accountId: { type: mongoose.Schema.Types.ObjectId }, // which university account the money was sent to
+      accountLabel: { type: String, trim: true, maxlength: 200 }, // frozen text, e.g. "HBL - Smart Campus - 0123456789"
+      bankName: { type: String, trim: true, maxlength: 80 }, // the provider: bank name, JazzCash or EasyPaisa
+      senderNumber: { type: String, trim: true, maxlength: 40 }, // the account / wallet number the student sent from
+      reference: { type: String, trim: true, maxlength: 80 }, // transaction id (TID) / reference number shown on the slip
       transferDate: Date,
       note: { type: String, trim: true, maxlength: 500 },
       proof: { originalName: String, storedName: String, mimeType: String, size: Number },
@@ -53,6 +64,16 @@ const paymentSchema = new mongoose.Schema(
       reviewedAt: Date,
       rejectReason: { type: String, maxlength: 500 },
     },
+    // What the student filled in BEFORE paying (kept in the finance officer's file): the mobile number for the payment SMS and
+    // the state of every document the fee requires. At the office the officer fills the same form for the student.
+    requirements: {
+      phone: String,
+      text: String, // the admission requirements written on the fee notice
+      documents: [{ type: { type: String }, status: String, _id: false }], // approved | pending | requires_correction | rejected | received_at_office
+      filledAt: Date,
+      filledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // set when the officer filled it at the counter
+    },
+    smsStatus: { type: String, enum: ['sent', 'no_phone', 'not_configured', 'failed'] }, // the confirmation SMS after the payment was received
     // Refund trail
     refund: { at: Date, by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, reason: String, gatewayRefundId: String },
     failureReason: String,

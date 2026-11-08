@@ -17,7 +17,7 @@ import {
   listAssignments, getAssignment, createAssignment, updateAssignment, deleteAssignment, addAttachments,
   downloadAttachment, submitAssignment, listSubmissions, gradeSubmission, downloadSubmissionFile,
 } from '../controllers/assignmentController.js';
-import { getSheet, saveAttendance, courseSummary, myAttendance, departmentSummary } from '../controllers/attendanceController.js';
+import { getSheet, saveAttendance, courseSummary, myAttendance, departmentSummary, courseSessions, myClasses } from '../controllers/attendanceController.js';
 import {
   createQuiz, updateQuiz, deleteQuiz, startSurprise, closeQuiz, listQuizzes, getQuiz, quizResults,
   startAttempt, saveAnswers, submitAttempt, myQuizResults,
@@ -62,6 +62,8 @@ export const attendanceRouter = Router();
 attendanceRouter.use(protect);
 attendanceRouter.get('/me', authorize(STUDENT), validate(myAttendanceQuery, 'query'), myAttendance);
 attendanceRouter.get('/department', authorize(UNIVERSITY_HEAD, HOD), validate(deptAttendanceQuery, 'query'), departmentSummary);
+attendanceRouter.get('/mine', authorize(TEACHER), myClasses);
+attendanceRouter.get('/course/:courseId/sessions', authorize(...STAFF), courseParam, courseSessions);
 attendanceRouter.get('/course/:courseId/sheet', authorize(...STAFF), courseParam, validate(sheetQuery, 'query'), getSheet);
 attendanceRouter.get('/course/:courseId/summary', authorize(...STAFF), courseParam, courseSummary);
 attendanceRouter.put('/course/:courseId', authorize(TEACHER), courseParam, validate(saveAttendanceSchema), saveAttendance);

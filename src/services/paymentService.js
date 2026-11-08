@@ -122,7 +122,15 @@ export const markPaid = async (paymentId, extra = {}) => {
   const what = payment.items.map((i) => i.title).join(', ');
   const message = `Your ${HOW[payment.method] || 'payment'} of ${payment.currency} ${payment.totalAmount} was received. Receipt ${payment.receiptNumber}. ${what}.`;
   await notifyUsers([payment.student], { title: 'Payment received', message, type: 'payment', link: '/fees' });
-  smsToUser(payment.student, `Payment received: ${payment.currency} ${payment.totalAmount}. Receipt ${payment.receiptNumber}.`); // optional, never awaited
+  // The confirmation SMS names the roll number, so a student at the office (or the family) can tell which payment it is. Whether it
+  // could be sent is kept on the payment, so the finance office can see it.
+  const [rollRow, settings] = await Promise.all([StudentProfile.findOne({ user: payment.student }).select('rollNumber').lean(), UniversitySettings.getSettings()]);
+  const shortWhat = what.length > 70 ? `${what.slice(0, 67)}...` : what;
+  payment.smsStatus = await smsToUser(
+    payment.student,
+    `${String(settings.universityName).slice(0, 40)}: payment received for Roll No ${rollRow?.rollNumber || '-'}. ${shortWhat}. ${payment.currency} ${payment.totalAmount}. Receipt ${payment.receiptNumber}. Thank you.`
+  );
+  await payment.save();
   return payment;
 };
 

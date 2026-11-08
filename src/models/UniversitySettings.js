@@ -41,14 +41,22 @@ const universitySettingsSchema = new mongoose.Schema(
       lateFeeEnabled: { type: Boolean, default: true },
       currency: { type: String, default: 'PKR' },
     },
-    // The account students send fees to. Only logged-in users can read it (it is NOT part of the public settings).
-    bankAccount: {
-      bankName: { type: String, default: '', trim: true, maxlength: 80 },
-      accountTitle: { type: String, default: '', trim: true, maxlength: 120 },
-      accountNumber: { type: String, default: '', trim: true, maxlength: 40 },
-      iban: { type: String, default: '', trim: true, maxlength: 40 },
-      branch: { type: String, default: '', trim: true, maxlength: 120 },
-      instructions: { type: String, default: '', trim: true, maxlength: 600 },
+    // Where students can send fees: any number of bank accounts, JazzCash and EasyPaisa numbers. The FINANCE OFFICER manages
+    // this list (Finance Desk > Payment accounts). Logged-in users read it, it is NOT part of the public settings.
+    paymentAccounts: {
+      type: [
+        {
+          kind: { type: String, enum: ['bank', 'jazzcash', 'easypaisa'], required: true },
+          providerName: { type: String, default: '', trim: true, maxlength: 80 }, // bank name, or JazzCash / EasyPaisa
+          accountTitle: { type: String, default: '', trim: true, maxlength: 120 },
+          accountNumber: { type: String, required: true, trim: true, maxlength: 40 }, // account number or mobile wallet number
+          iban: { type: String, default: '', trim: true, maxlength: 40 },
+          branch: { type: String, default: '', trim: true, maxlength: 120 },
+          instructions: { type: String, default: '', trim: true, maxlength: 600 },
+          active: { type: Boolean, default: true },
+        },
+      ],
+      default: [],
     },
     admissionRules: {
       minAttendancePercentage: { type: Number, default: 75, min: 0, max: 100 },

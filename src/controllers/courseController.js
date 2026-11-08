@@ -8,6 +8,7 @@ import StudentProfile from '../models/StudentProfile.js';
 import { reassignCourseSlots } from '../services/timetableService.js';
 import { enrollInCourses } from '../services/enrollmentService.js';
 import { notifyTeacherChange } from '../services/assignmentNotice.js';
+import { fillOutline, backfillOutlines, syncFromCurriculum } from '../services/outlineService.js';
 import { assertNoBlockers } from '../utils/blockers.js';
 import { courseBlockerChecks, purgeCourse } from '../services/courseRemoval.js';
 import { ROLES, SEMESTER_STATUS, COURSE_STATUS } from '../config/constants.js';
@@ -70,12 +71,14 @@ export const listCourses = asyncHandler(async (req, res) => {
   if (status) filter.status = status;
 
   const courses = await populateCourse(Course.find(filter)).sort({ code: 1, section: 1 });
+  if (req.user.role !== ROLES.UNIVERSITY_HEAD) await backfillOutlines(courses); // classes made before the contents existed get them now
   sendSuccess(res, courses);
 });
 
 export const getCourse = asyncHandler(async (req, res) => {
   const course = await findCourse(req.params.id);
   assertCourseAccess(req.user, course);
+  await backfillOutlines([course]);
   sendSuccess(res, course);
 });
 
@@ -100,6 +103,7 @@ export const createCourse = asyncHandler(async (req, res) => {
     department: semester.department,
     createdBy: req.user._id,
   });
+  if (await fillOutline(course, semester.number)) await course.save(); // course contents from the curriculum, when it has them
   // Students already placed in this semester and section join the new course automatically.
   const profiles = await StudentProfile.find({ semester: semester._id, section: course.section, status: 'active' }).select('user').lean();
   const { enrolled } = await enrollInCourses(profiles.map((p) => p.user), [course], req.user._id);
@@ -133,6 +137,7 @@ export const assignTeacher = asyncHandler(async (req, res) => {
   // If the course is already on the timetable, its slots move to the new teacher (or the change is refused on a clash).
   if (String(previous || '') !== String(req.body.teacher || '')) await reassignCourseSlots(course, req.body.teacher);
   course.teacher = req.body.teacher;
+  await fillOutline(course, course.semester?.number); // the subject's course contents come from the curriculum automatically
   await course.save();
 
   // The new teacher is told the subject, credit hours, semester, section, student count and course contents.
@@ -151,6 +156,41 @@ export const deleteCourse = asyncHandler(async (req, res) => {
   await purgeCourse(course);
   logAudit(req, 'course.delete', 'Course', course._id, { code: course.code, title: course.title });
   sendSuccess(res, null, 'Course deleted');
+});
+
+// HOD: bring the official subject name and the course contents from the BS curriculum into ONE class.
+// The class is matched by its code, then by its subject name. Its own contents are kept unless overwrite is true.
+export const syncCurriculum = asyncHandler(async (req, res) => {
+  const course = await findCourse(req.params.id);
+  assertDepartmentAccess(req.user, course.department._id);
+  if (course.status === COURSE_STATUS.ARCHIVED) throw ApiError.badRequest('Archived courses cannot be changed');
+  const result = await syncFromCurriculum(course, { overwrite: !!req.body?.overwrite });
+  if (!result.matched) throw ApiError.notFound(`No subject named "${course.title}" (${course.code}) was found in the approved curriculum of this department. Check the code or the subject name.`);
+  if (result.changed.length) await course.save();
+  logAudit(req, 'course.sync_curriculum', 'Course', course._id, { changed: result.changed, source: result.source });
+  const message = result.changed.length
+    ? `Updated from the curriculum (${result.changed.join(' and ')}): ${result.source}`
+    : result.hasContents
+    ? 'Nothing to change. The class already has its contents (use "Replace contents" to overwrite them)'
+    : `Matched with ${result.source}, but the curriculum has no course contents for this subject`;
+  sendSuccess(res, await findCourse(course._id), message);
+});
+
+// HOD: do the same for every active class of one semester at once.
+export const syncSemesterCurriculum = asyncHandler(async (req, res) => {
+  const semester = await Semester.findById(req.body.semester);
+  if (!semester) throw ApiError.notFound('Semester not found');
+  assertDepartmentAccess(req.user, semester.department);
+  const courses = await populateCourse(Course.find({ semester: semester._id, status: COURSE_STATUS.ACTIVE }));
+  const summary = { updated: 0, alreadyComplete: 0, notFound: [], noContents: [] };
+  for (const course of courses) {
+    const r = await syncFromCurriculum(course, { overwrite: false });
+    if (!r.matched) { summary.notFound.push(`${course.code} ${course.title}`); continue; }
+    if (r.changed.length) { await course.save(); summary.updated += 1; } else summary.alreadyComplete += 1;
+    if (!r.hasContents) summary.noContents.push(`${course.code} ${course.title}`);
+  }
+  logAudit(req, 'course.sync_curriculum_semester', 'Semester', semester._id, { updated: summary.updated, notFound: summary.notFound.length });
+  sendSuccess(res, summary, `${summary.updated} class(es) updated from the curriculum`);
 });
 
 export const setCourseStatus = asyncHandler(async (req, res) => {

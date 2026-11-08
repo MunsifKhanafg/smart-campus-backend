@@ -12,6 +12,9 @@ import { enrollInCourses } from '../services/enrollmentService.js';
 import { notifyTeacherChange } from '../services/assignmentNotice.js';
 import { normalizeCode } from '../services/curriculumService.js';
 import { subjectsOf, createMissingClasses } from '../services/classService.js';
+import TimetableSlot from '../models/TimetableSlot.js';
+import { findBlockers } from '../utils/blockers.js';
+import { courseBlockerChecks, purgeCourse } from '../services/courseRemoval.js';
 import { ROLES, COURSE_STATUS, STUDENT_STATUS, CLOSED_SEMESTER_STATES } from '../config/constants.js';
 
 const loadSemester = async (id) => {
@@ -84,9 +87,11 @@ export const generateCourses = asyncHandler(async (req, res) => {
 
   const program = await Program.findOne({ _id: req.body.program, department: semester.department._id, status: 'active' });
   if (!program) throw ApiError.notFound('Programme not found in your department');
-  const subjects = subjectsOf(program, semester.number);
+  // "Offer all" means the compulsory subjects of the scheme. The elective options and the "Specialization Elective" slots
+  // (CS67XX) are chosen one by one by the HOD (Offer ticked subjects / Replace).
+  const subjects = subjectsOf(program, semester.number).filter((s) => !s.elective && !/XX/.test(s.code));
   if (!subjects.length) {
-    throw ApiError.badRequest(`${program.name} has no subjects for semester ${semester.number}. The semester number of ${semester.name} must match a semester of the curriculum`);
+    throw ApiError.badRequest(`${program.name} has no compulsory subjects for semester ${semester.number}. Tick the electives you want to offer instead, or check that the semester number of ${semester.name} matches a semester of the curriculum`);
   }
 
   const { made, enrolled } = await createMissingClasses({ semester, program, subjects, sections, userId: req.user._id });
@@ -169,4 +174,98 @@ export const assignSubject = asyncHandler(async (req, res) => {
     created,
     studentsEnrolled: enrolled,
   }, teacher ? (created ? 'Class created and teacher assigned' : 'Teacher assigned') : 'Teacher removed', created ? 201 : 200);
+});
+
+// ---------- Choose WHICH subjects are offered ----------
+// A later semester can list many subjects (for example 21 in semester 7) of which the HOD offers only five or six.
+// Only the chosen subjects become classes, so only they appear under Courses, on the timetable and to students.
+const loadOpenSemester = async (id, user) => {
+  const semester = await loadSemester(id);
+  assertDepartmentAccess(user, semester.department._id);
+  if (CLOSED_SEMESTER_STATES.includes(semester.status)) throw ApiError.badRequest(`This semester is ${semester.status}`);
+  return semester;
+};
+const loadProgram = async (id, semester) => {
+  const program = await Program.findOne({ _id: id, department: semester.department._id, status: 'active' });
+  if (!program) throw ApiError.notFound('Programme not found in your department');
+  return program;
+};
+
+// Takes classes out of a semester so that nothing of them stays on the timetable.
+//   no real records  -> deleted completely (timetable slots and enrollments go with it)
+//   has real records -> archived: its attendance / marks stay for the history, but its timetable slots are removed
+const takeOut = async (courses, semesterName) => {
+  const out = { removed: 0, archived: [] };
+  for (const c of courses) {
+    const blockers = await findBlockers(courseBlockerChecks(c));
+    if (blockers.length) {
+      await TimetableSlot.deleteMany({ course: c._id });
+      await Course.updateOne({ _id: c._id }, { status: COURSE_STATUS.ARCHIVED });
+      out.archived.push({ code: c.code, section: c.section, because: blockers.map(([n, label]) => `${n} ${label}`).join(', ') });
+    } else {
+      await purgeCourse(c);
+      out.removed += 1;
+    }
+    if (c.teacher) {
+      await notifyUsers([c.teacher], { title: 'Subject removed from your classes', message: `${c.code} ${c.title} (section ${c.section}) is no longer offered in ${semesterName}. It was removed from your timetable.`, type: 'timetable', link: '/my-timetable' });
+    }
+  }
+  return out;
+};
+
+export const offerSubjects = asyncHandler(async (req, res) => {
+  const semester = await loadOpenSemester(req.body.semester, req.user);
+  const program = await loadProgram(req.body.program, semester);
+  const wanted = new Set(req.body.codes.map(normalizeCode));
+  const chosen = subjectsOf(program, semester.number).filter((s) => wanted.has(s.code));
+  if (!chosen.length) throw ApiError.badRequest('None of the chosen subjects belongs to this semester of the curriculum');
+
+  const { made, enrolled } = await createMissingClasses({ semester, program, subjects: chosen, sections: [...new Set(req.body.sections)], userId: req.user._id });
+  logAudit(req, 'teaching.offer', 'Semester', semester._id, { subjects: chosen.map((s) => s.code), created: made.length, enrolled });
+  sendSuccess(res, { created: made.length, subjects: chosen.length, studentsEnrolled: enrolled }, made.length ? `${made.length} class(es) created for the chosen subjects` : 'These subjects are already offered', made.length ? 201 : 200);
+});
+
+// Stop offering a subject: its class(es) leave Courses and the timetable.
+export const withdrawSubject = asyncHandler(async (req, res) => {
+  const semester = await loadOpenSemester(req.body.semester, req.user);
+  await loadProgram(req.body.program, semester);
+  const code = normalizeCode(req.body.code);
+  const courses = await Course.find({ semester: semester._id, code }).lean();
+  if (!courses.length) throw ApiError.notFound('This subject has no class in the semester');
+  const r = await takeOut(courses, semester.name);
+  logAudit(req, 'teaching.withdraw', 'Semester', semester._id, { code, removed: r.removed, archived: r.archived.length });
+  sendSuccess(res, r, `${code} is no longer offered in ${semester.name}`);
+});
+
+// Swap an offered subject for another subject of the same semester of the curriculum. The old class is taken out of Courses
+// AND the timetable (nothing of it remains there). The new class is created for the same sections and, if asked,
+// keeps the same teacher. The HOD then schedules the new class on the timetable.
+export const replaceSubject = asyncHandler(async (req, res) => {
+  const semester = await loadOpenSemester(req.body.semester, req.user);
+  const program = await loadProgram(req.body.program, semester);
+  const from = normalizeCode(req.body.from);
+  const subjects = subjectsOf(program, semester.number);
+  const target = subjects.find((s) => s.code === normalizeCode(req.body.to));
+  if (!target) throw ApiError.badRequest('The new subject is not part of this semester of the curriculum');
+  if (target.code === from) throw ApiError.badRequest('Choose a different subject to replace it with');
+
+  const oldCourses = await Course.find({ semester: semester._id, code: from }).lean();
+  if (!oldCourses.length) throw ApiError.notFound(`${from} has no class in this semester`);
+  const sections = [...new Set(oldCourses.map((c) => c.section))];
+  const teacherOf = new Map(oldCourses.filter((c) => c.teacher).map((c) => [c.section, c.teacher]));
+
+  const removed = await takeOut(oldCourses, semester.name);
+  const { made, enrolled } = await createMissingClasses({ semester, program, subjects: [target], sections, userId: req.user._id });
+
+  if (req.body.keepTeacher) {
+    for (const c of made) {
+      const t = teacherOf.get(c.section);
+      if (!t) continue;
+      c.teacher = t;
+      await c.save();
+      await notifyTeacherChange({ course: c, semesterName: semester.name, previous: null, next: String(t) });
+    }
+  }
+  logAudit(req, 'teaching.replace', 'Semester', semester._id, { from, to: target.code, created: made.length, removed: removed.removed, archived: removed.archived.length });
+  sendSuccess(res, { created: made.length, studentsEnrolled: enrolled, ...removed }, `${from} replaced by ${target.code}. The old class was removed from the timetable`);
 });

@@ -9,8 +9,17 @@ const make = (windowMinutes, max, message) =>
     message: { success: false, message },
   });
 
-// Stops password guessing: 10 login attempts per 15 minutes per IP.
-export const loginLimiter = make(15, 10, 'Too many login attempts. Please try again in 15 minutes.');
+// Stops password guessing. Only FAILED logins count (a successful login does not use up the allowance), and the limit is
+// generous while developing, so testing with different accounts never locks you out. The count lives in memory:
+// restarting the server clears it.
+export const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: process.env.NODE_ENV === 'production' ? 20 : 1000,
+  skipSuccessfulRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many failed login attempts. Please try again in 15 minutes.' },
+});
 
 // General limiter for the whole API.
 export const apiLimiter = make(15, 600, 'Too many requests. Please slow down.');

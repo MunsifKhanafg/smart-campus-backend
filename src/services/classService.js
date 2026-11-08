@@ -69,7 +69,7 @@ export const syncProgramClasses = async (program, userId) => {
   }
 
   const semesters = await Semester.find({ _id: { $in: [...bySemester.keys()] } });
-  const report = { removed: 0, updated: 0, created: 0, kept: [], semesters: [] };
+  const report = { removed: 0, updated: 0, created: 0, notOffered: 0, kept: [], semesters: [] };
 
   for (const semester of semesters) {
     const list = bySemester.get(String(semester._id));
@@ -97,11 +97,9 @@ export const syncProgramClasses = async (program, userId) => {
       }
     }
 
-    if (subjects.length && !CLOSED_SEMESTER_STATES.includes(semester.status)) {
-      const sections = [...new Set(list.map((c) => c.section))];
-      const { made } = await createMissingClasses({ semester, program, subjects, sections, userId });
-      report.created += made.length;
-    }
+    // New subjects are NOT turned into classes here. The HOD decides which subjects of a semester are offered
+    // (for example 5 of 21 in semester 7) on the Assign Teachers page; we only report how many are not offered.
+    report.notOffered += subjects.filter((s) => !list.some((c) => c.code === s.code)).length;
     report.semesters.push({ name: semester.name, number: semester.number, subjects: subjects.length });
   }
   return report;

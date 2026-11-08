@@ -148,7 +148,7 @@ export const approveImport = asyncHandler(async (req, res) => {
   }
 
   let replaced = 0;
-  const classReport = { removed: 0, created: 0, kept: [] };
+  const classReport = { removed: 0, created: 0, notOffered: 0, kept: [] };
   for (const p of plain) {
     const existing = await Program.findOne({ department: p.department, name: new RegExp(`^${escapeRx(p.name)}$`, 'i') });
     const semesters = p.semesters.filter((s) => s.subjects.length);
@@ -164,6 +164,7 @@ export const approveImport = asyncHandler(async (req, res) => {
       const sync = await syncProgramClasses(existing, req.user._id);
       classReport.removed += sync.removed;
       classReport.created += sync.created;
+      classReport.notOffered += sync.notOffered;
       classReport.kept.push(...sync.kept);
     } else {
       await Program.create({ name: p.name, department: p.department, semesters, sourceImport: imp._id, createdBy: req.user._id });

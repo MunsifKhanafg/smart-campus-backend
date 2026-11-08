@@ -143,9 +143,16 @@ export const updateStudent = asyncHandler(async (req, res) => {
   const profile = await findProfile(req.params.id);
   assertDepartmentAccess(req.user, profile.department._id);
 
-  const { name, phone, ...profileFields } = req.body;
-  if (name !== undefined || phone !== undefined) {
+  const { name, phone, email, ...profileFields } = req.body;
+  if (profileFields.rollNumber && (await StudentProfile.exists({ rollNumber: profileFields.rollNumber.toUpperCase(), _id: { $ne: profile._id } }))) {
+    throw ApiError.conflict('Another student already has this roll number'); // checked first, so nothing is half-saved
+  }
+  if (name !== undefined || phone !== undefined || email !== undefined) {
     const user = await User.findById(profile.user._id);
+    if (email !== undefined && email !== user.email) {
+      if (await User.exists({ email, _id: { $ne: user._id } })) throw ApiError.conflict('Another account already uses this email');
+      user.email = email; // the student signs in with the new email from now on
+    }
     if (name !== undefined) user.name = name;
     if (phone !== undefined) user.phone = phone;
     await user.save({ validateBeforeSave: false });

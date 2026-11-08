@@ -16,6 +16,9 @@ const examinationAdmissionSchema = new mongoose.Schema(
     requestedAt: { type: Date, default: Date.now },
     reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     reviewedAt: Date,
+    // Set when the finance office applied at the counter for a student who cannot use the online system.
+    requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    atOffice: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

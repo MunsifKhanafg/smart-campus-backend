@@ -61,6 +61,14 @@ export const updateAccountSchema = z
 
 export const resetPasswordSchema = z.object({ temporaryPassword: z.string().min(8, 'At least 8 characters').max(72) });
 
+// An HOD (own department) or the principal corrects a teacher's name, email, phone or qualification after a typing mistake.
+export const updateUserSchema = z.object({
+  name: z.string().trim().min(2).max(100).optional(),
+  email: z.string().trim().toLowerCase().email().max(120).optional(),
+  phone: z.string().trim().max(30).optional(),
+  qualification: z.string().trim().max(200).optional(),
+});
+
 export const listUsersQuery = z.object({
   role: z.enum(Object.values(ROLES)).optional(),
   department: objectId.optional(),
