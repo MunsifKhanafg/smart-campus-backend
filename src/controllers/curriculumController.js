@@ -223,6 +223,34 @@ export const listPrograms = asyncHandler(async (req, res) => {
   sendSuccess(res, programs.map((p) => ({ ...p, subjectCount: p.semesters.reduce((n, s) => n + s.subjects.length, 0) })));
 });
 
+// A subject was read into the wrong semester (for example Database Systems in semester 1 instead of 3). The principal moves it
+// to the right semester. Classes made from it in the wrong semester are removed (unless they have real records, then they stay),
+// and the HOD of that department offers it in the right semester on the Assign Teachers page.
+export const moveSubject = asyncHandler(async (req, res) => {
+  const program = await Program.findById(req.params.id);
+  if (!program) throw ApiError.notFound('Programme not found');
+  const { code, toSemester } = req.body;
+
+  const from = program.semesters.find((s) => s.subjects.some((x) => x.code === code));
+  if (!from) throw ApiError.notFound(`${code} is not part of this programme`);
+  if (from.number === toSemester) throw ApiError.badRequest(`${code} is already in semester ${toSemester}`);
+
+  const subject = JSON.parse(JSON.stringify(from.subjects.find((x) => x.code === code)));
+  from.subjects = from.subjects.filter((x) => x.code !== code);
+  let dest = program.semesters.find((s) => s.number === toSemester);
+  if (!dest) {
+    program.semesters.push({ number: toSemester, subjects: [] });
+    dest = program.semesters[program.semesters.length - 1];
+  }
+  dest.subjects.push(subject);
+  program.semesters = program.semesters.filter((s) => s.subjects.length).sort((a, b) => a.number - b.number);
+  await program.save();
+
+  const sync = await syncProgramClasses(program, req.user._id);
+  logAudit(req, 'program.move_subject', 'Program', program._id, { code, from: from.number, to: toSemester, classesRemoved: sync.removed });
+  sendSuccess(res, { classesRemoved: sync.removed, kept: sync.kept }, `${code} moved from semester ${from.number} to semester ${toSemester}`);
+});
+
 // Looks at the classes made from a programme: which can be removed (no real records) and which must stay.
 const inspectProgramClasses = async (program) => {
   const courses = await Course.find({ program: program._id }).select('code title section semester').populate('semester', 'name').lean();

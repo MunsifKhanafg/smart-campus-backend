@@ -8,7 +8,7 @@ import { assertDepartmentAccess } from '../middleware/auth.js';
 import { logAudit } from '../utils/audit.js';
 import { notifyUsers } from '../utils/notify.js';
 import { assertNoSlotConflicts, assertCreditHoursAvailable, assertSectionFree, notifyTimetableChange } from '../services/timetableService.js';
-import { buildGrid, scheduleLessons, markBusy, emptyBusy, clock } from '../services/timetableGenerator.js';
+import { makePeriods, buildSchedule, hhmm } from '../services/timetableGenerator.js';
 import {
   ROLES,
   COURSE_STATUS,
@@ -231,8 +231,8 @@ export const generateTimetable = asyncHandler(async (req, res) => {
   assertSemesterOpen(semester);
 
   const cfg = req.body;
-  const grid = buildGrid(cfg);
-  if (!grid.length) throw ApiError.badRequest('No period fits between the start and the end time');
+  const periods = makePeriods(toMinutes(cfg.startTime), toMinutes(cfg.endTime), cfg.slotMinutes);
+  if (!periods.length) throw ApiError.badRequest('No period fits between the start and the end time');
   const rooms = [...new Set(cfg.rooms.map((r) => r.trim().toUpperCase()).filter(Boolean))];
 
   const courses = await Course.find({ semester: semester._id, status: COURSE_STATUS.ACTIVE }).populate('teacher', 'name').lean();
@@ -248,40 +248,40 @@ export const generateTimetable = asyncHandler(async (req, res) => {
   own.forEach((s) => ownMinutes.set(String(s.course), (ownMinutes.get(String(s.course)) || 0) + s.endMinutes - s.startMinutes));
 
   // Everything already on a live timetable keeps its teacher, room and section busy.
-  const existing = await TimetableSlot.find({ day: { $in: cfg.days } }).populate('semester', 'status').populate('course', 'section').lean();
-  const busy = emptyBusy();
-  for (const s of existing.filter((x) => x.semester && !CLOSED_SEMESTER_STATES.includes(x.semester.status))) {
-    const sameSemester = String(s.semester._id) === String(semester._id);
-    markBusy(busy, grid, {
-      startMinutes: s.startMinutes, endMinutes: s.endMinutes, day: s.day, teacher: String(s.teacher), room: s.room,
-      group: sameSemester ? `${semester._id}|${s.course?.section}` : null,
-    });
-  }
+  const live = (await TimetableSlot.find({ day: { $in: cfg.days } }).populate('semester', 'status').populate('course', 'section').lean())
+    .filter((x) => x.semester && !CLOSED_SEMESTER_STATES.includes(x.semester.status));
+  const existing = live.map((s) => ({
+    teacher: String(s.teacher), room: s.room, day: s.day, startMinutes: s.startMinutes, endMinutes: s.endMinutes,
+    group: String(s.semester._id) === String(semester._id) ? `${semester._id}|${s.course?.section}` : null,
+  }));
 
   const lessons = courses
     .filter((c) => c.teacher)
     .map((c) => ({
-      courseId: c._id, code: c.code, title: c.title, teacherId: String(c.teacher._id), group: `${semester._id}|${c.section}`,
-      hours: Math.max(0, (c.creditHours || 0) - Math.round((ownMinutes.get(String(c._id)) || 0) / 60)),
+      id: String(c._id), code: c.code, teacher: String(c.teacher._id), group: `${semester._id}|${c.section}`,
+      sessions: Math.max(0, (c.creditHours || 0) - Math.round((ownMinutes.get(String(c._id)) || 0) / 60)),
     }))
-    .filter((l) => l.hours > 0);
+    .filter((l) => l.sessions > 0);
 
-  const { placed, unplaced } = scheduleLessons({ lessons, grid, days: cfg.days, rooms, busy });
-  if (placed.length) {
-    await TimetableSlot.insertMany(placed.map((p) => ({
-      timetable: timetable._id, department: semester.department, semester: semester._id, course: p.courseId, teacher: p.teacherId,
-      room: p.room, day: p.day, startTime: clock(p.start), endTime: clock(p.end), startMinutes: p.start, endMinutes: p.end,
+  const { placements, unplaced } = buildSchedule({ classes: lessons, days: cfg.days, periods, rooms, existing, seed: cfg.seed ?? Date.now() % 100000 });
+  if (placements.length) {
+    await TimetableSlot.insertMany(placements.map((p) => ({
+      timetable: timetable._id, department: semester.department, semester: semester._id, course: p.classId,
+      teacher: lessons.find((l) => l.id === p.classId).teacher,
+      room: p.room, day: p.day, startTime: hhmm(p.start), endTime: hhmm(p.end), startMinutes: p.start, endMinutes: p.end,
     })));
   }
   await Timetable.updateOne({ _id: timetable._id }, { status: TIMETABLE_STATUS.DRAFT, $inc: { version: 1 } });
 
-  logAudit(req, 'timetable.generate', 'Timetable', timetable._id, { semester: semester.name, mode: cfg.mode, placed: placed.length, unplaced: unplaced.length });
+  const codeOf = new Map(lessons.map((l) => [l.id, l.code]));
+  const reason = 'No period was free: the teacher, the section or every room is already busy in all periods. Add rooms or days, or give the course to another teacher.';
+  logAudit(req, 'timetable.generate', 'Timetable', timetable._id, { semester: semester.name, mode: cfg.mode, placed: placements.length, unplaced: unplaced.length });
   sendSuccess(res, {
-    placed: placed.length,
-    periodsPerDay: grid.length,
-    unplaced: unplaced.map((u) => ({ code: u.code, missing: u.missing, reason: u.reason })),
+    placed: placements.length,
+    periodsPerDay: periods.length,
+    unplaced: unplaced.map((u) => ({ code: codeOf.get(u.classId), missing: u.missing, reason })),
     noTeacher,
-  }, unplaced.length ? `${placed.length} classes placed, ${unplaced.length} course(s) could not be completed` : `Timetable created with ${placed.length} classes. Check it, change anything you like, then publish`);
+  }, unplaced.length ? `${placements.length} classes placed, ${unplaced.length} course(s) could not be completed` : `Timetable created with ${placements.length} classes. Check it, change anything you like, then publish`);
 });
 
 // Student or teacher: their own classes from PUBLISHED timetables only.

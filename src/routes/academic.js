@@ -51,6 +51,7 @@ import {
   listPrograms,
   deleteProgram,
   previewProgramDelete,
+  moveSubject,
   setProgramStatus,
   resyncProgram,
 } from '../controllers/curriculumController.js';
@@ -106,6 +107,7 @@ curriculumRouter.get('/programs', authorize(UNIVERSITY_HEAD, HOD), validate(prog
 curriculumRouter.patch('/programs/:id/status', authorize(UNIVERSITY_HEAD), idParam, validate(z.object({ status: z.enum(['active', 'archived']) })), setProgramStatus);
 curriculumRouter.delete('/programs/:id', authorize(UNIVERSITY_HEAD), idParam, deleteProgram);
 curriculumRouter.get('/programs/:id/delete-preview', authorize(UNIVERSITY_HEAD), idParam, previewProgramDelete);
+curriculumRouter.post('/programs/:id/move-subject', authorize(UNIVERSITY_HEAD), idParam, validate(z.object({ code: z.string().trim().min(2).max(30), toSemester: z.number().int().min(1).max(12) })), moveSubject);
 curriculumRouter.post('/programs/:id/resync', authorize(UNIVERSITY_HEAD), idParam, resyncProgram);
 
 // ---------- HOD: teacher assignment board ----------

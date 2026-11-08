@@ -36,10 +36,16 @@ test('contents never leak into the next subject or the next semester', () => {
   assert.equal(all.filter((s) => s.outline).length, 1);
 });
 
-test('a blank line ends the contents paragraph', () => {
-  const text = 'BS Software Engineering\nSemester 1\nSE-101 Intro to SE 3\nContents: Requirements\n\nSome unrelated footer text';
+test('course contents continue across blank lines and stop at the next heading such as "Recommended Books"', () => {
+  const text = 'BS Software Engineering\nSemester 1\nSE-101 Intro to SE 3\nContents: Requirements\n\nDesign and testing\n12\n\nRecommended Books\nSommerville';
   const subject = parseCurriculumRules(text).programs[0].semesters[0].subjects[0];
-  assert.equal(subject.outline, 'Requirements');
+  assert.equal(subject.outline, 'Requirements\n\nDesign and testing');
+});
+
+test('list items in the contents start a new line, wrapped sentences are joined', () => {
+  const text = 'BS CS\nSemester 1\nCS-104 Functional English 3\nCourse Contents: Divided into functions:\n\nFunction Asking Questions\na) Structure The Present\nPerfect\nb) Reading Guessing';
+  const subject = parseCurriculumRules(text).programs[0].semesters[0].subjects[0];
+  assert.equal(subject.outline, 'Divided into functions:\n\nFunction Asking Questions\na) Structure The Present Perfect\nb) Reading Guessing');
 });
 
 // ---------- the draft cleaner (used for AI output and for the review screen) ----------

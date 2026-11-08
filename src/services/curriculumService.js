@@ -220,6 +220,9 @@ export const parseCurriculumRules = (text) => {
         title = `${title} ${lines[i + 1]}`.trim();
         lines[i + 1] = '';
         i += 1;
+        // the credit hours can end the wrapped line: "Algorithms 4(3+1)"
+        const tail = title.match(/^(.*?)\s+(\d)\s*\(\s*\d\s*[+\-,]\s*\d\s*\)$/);
+        if (tail) { title = tail[1]; credit = cleanCredit(tail[2]); }
       }
       if (credit === null && CREDIT_ONLY_RX.test(lines[i + 1] || '')) { credit = cleanCredit(lines[i + 1].match(CREDIT_ONLY_RX)[1]); lines[i + 1] = ''; }
       const code = placeholderCode(normalizeCode(course[1]), title);

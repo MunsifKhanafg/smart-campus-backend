@@ -84,6 +84,34 @@ export const nextApplicationNumber = async (now = new Date()) => {
   return `APP-${year}-${String(seq).padStart(5, '0')}`;
 };
 
+// Same list under the name the older tests and screens use.
+export const DEFAULT_REQUIRED_DOCUMENTS = DEFAULT_DOCUMENTS;
+
+// marks / total as a percentage rounded to two decimals. Form values arrive as text, so strings are accepted.
+export const calcPercentage = (marks, total) => {
+  const m = Number(marks);
+  const t = Number(total);
+  if (!Number.isFinite(m) || !Number.isFinite(t) || t <= 0) return 0;
+  return Math.round((m / t) * 10000) / 100;
+};
+
+// Simple merit order by the education percentage. Every department + programme + intake has its own list that starts at
+// rank 1. Equal percentages are ranked by who applied first, so the order is never random. Returns Map(applicationId -> rank).
+export const rankApplications = (applications) => {
+  const groups = new Map();
+  for (const a of applications) {
+    const k = `${a.department}|${a.program}|${a.intake}`;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(a);
+  }
+  const ranks = new Map();
+  for (const list of groups.values()) {
+    list.sort((a, b) => (b.education?.percentage || 0) - (a.education?.percentage || 0) || new Date(a.createdAt) - new Date(b.createdAt));
+    list.forEach((a, i) => ranks.set(a._id, i + 1));
+  }
+  return ranks;
+};
+
 // Ranks rows inside each department by merit score (highest first). Equal scores share a rank.
 export const rankByDepartment = (rows, deptKey = (r) => String(r.department)) => {
   const groups = new Map();
