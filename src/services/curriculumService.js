@@ -60,8 +60,13 @@ const TOTAL_RX = /^total(?:\s+semester)?\s+credit\s+hours\b\D*(\d{1,3})?/i;
 
 // "Course Contents: Variables, loops ..." under a subject. The following lines (until a blank line or the next
 // heading such as "Recommended Books") continue the same text. A "Course Description" is only used when a subject has no contents.
-const CONTENTS_RX = /^(?:course\s+)?(?:contents?|topics|syllabus|outline)\s*[:\u2013-]\s*(.*)$/i;
-const DESCRIPTION_RX = /^course\s+description\s*[:\u2013-]\s*(.*)$/i;
+// The heading may carry its text on the same line ("Course Contents: Variables, loops") or stand alone ("Course Contents" and the
+// topics on the lines below it). Both are accepted. A plain word such as "Contents" only counts as a heading when the line is JUST that heading.
+const CONTENTS_RX = /^(?:(?:detailed|brief|course)\s+)*(?:contents?|topics(?:\s+covered)?|syllabus|outline)\s*(?:[:\u2013-]\s*(.*))?$/i;
+const DESCRIPTION_RX = /^course\s+description\s*(?:[:\u2013-]\s*(.*))?$/i;
+// Subject detail pages: "Course Code: CS-101", "Course Title: Introduction to Computing" (or both on one line).
+const CODE_LABEL_RX = new RegExp(`^(?:course\\s+)?code\\s*[:\u2013-]\\s*(${CODE})\\b(.*)$`, 'i');
+const TITLE_LABEL_RX = /^(?:course\s+)?(?:title|name)\s*[:\u2013-]\s*(.+?)(?=\s+(?:credit\s+hours?|pre-?requisites?|pre-?req)\b|$)/i;
 const STOP_RX = /^(?:recommended|reference|text)?\s*books?\b|^bibliography\b|^aims?\s+and\s+objectives?\b|^learning\s+(?:outcomes?|objectives?)\b|^pre-?requisites?\b|^assessment\b|^evaluation\b|^references?\b|^course\s+(?:code|title|objectives?)\b|^lab(?:oratory)?\s+(?:contents?|manual)\b/i;
 
 // "Seventh (7th) Semester Specializations Elective Courses": the pool of elective courses of that semester.
@@ -111,6 +116,14 @@ export const parseCurriculumRules = (text) => {
   let collect = null; // { subject, kind: 'contents' | 'description' }
 
   const keyOf = (p, s) => `${p.name}|${s.number}`;
+  // The scheme table can cut a long title; the subject's own page gives the full one. Only replace when it is clearly the same subject
+  // (one name contains the other), so a title line that belongs to the NEXT subject can never rename this one.
+  const applyFullTitle = (subject, value) => {
+    const full = String(value || '').replace(/\s+/g, ' ').trim().slice(0, 150);
+    const a = full.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const b = subject.title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    if (a.length >= b.length && a && (a === b || a.includes(b))) subject.title = full;
+  };
   const ensureProgram = (name) => {
     let p = programs.find((x) => x.name.toLowerCase() === name.toLowerCase());
     if (!p) { p = { name, semesters: [] }; programs.push(p); }
@@ -140,8 +153,8 @@ export const parseCurriculumRules = (text) => {
     if (head) {
       const isContents = CONTENTS_RX.test(line);
       collect = { subject: lastSubject, kind: isContents ? 'contents' : 'description' };
-      const first = head[1].trim();
-      if (isContents) lastSubject.outline = first; else descriptions.set(lastSubject, first);
+      const first = (head[1] || '').trim();
+      if (isContents) { if (first || !lastSubject.outline) lastSubject.outline = first; } else descriptions.set(lastSubject, first);
       continue;
     }
     if (collect && !STOP_RX.test(line) && !SEMESTER_RX.test(line) && !COURSE_RX.test(line) && !TOTAL_RX.test(line) && !ELECTIVE_HEAD_RX.test(line)) {
@@ -154,6 +167,17 @@ export const parseCurriculumRules = (text) => {
       continue;
     }
     if (collect) collect = null;
+
+    // ----- subject detail pages: the code line selects the subject, the title line gives its full name -----
+    const codeLabel = line.match(CODE_LABEL_RX);
+    if (codeLabel && program) {
+      lastSubject = findSubject(program, codeLabel[1]) || null;
+      const rest = codeLabel[2]?.match(TITLE_LABEL_RX);
+      if (lastSubject && rest) applyFullTitle(lastSubject, rest[1]);
+      continue;
+    }
+    const titleLabel = lastSubject && line.match(TITLE_LABEL_RX);
+    if (titleLabel) { applyFullTitle(lastSubject, titleLabel[1]); continue; }
     if (line.length > 160) continue;
 
     // ----- the elective course pool of a semester -----

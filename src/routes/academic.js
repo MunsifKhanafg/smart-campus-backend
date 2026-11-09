@@ -57,6 +57,7 @@ import {
   resyncProgram,
 } from '../controllers/curriculumController.js';
 import { board, assignSubject, generateCourses, offerSubjects, withdrawSubject, replaceSubject, matchSemester } from '../controllers/teachingController.js';
+import { listRequests, getRequest, decideRequest, cancelRequest, pendingByProgram } from '../controllers/curriculumRequestController.js';
 
 const { UNIVERSITY_HEAD, HOD, TEACHER, FINANCE_OFFICER } = ROLES;
 const idParam = validate(z.object({ id: objectId }), 'params');
@@ -111,6 +112,14 @@ curriculumRouter.delete('/programs/:id', authorize(UNIVERSITY_HEAD), idParam, de
 curriculumRouter.get('/programs/:id/delete-preview', authorize(UNIVERSITY_HEAD), idParam, previewProgramDelete);
 curriculumRouter.post('/programs/:id/move-subject', authorize(UNIVERSITY_HEAD), idParam, validate(z.object({ code: z.string().trim().min(2).max(30), toSemester: z.number().int().min(1).max(12) })), moveSubject);
 curriculumRouter.post('/programs/:id/resync', authorize(UNIVERSITY_HEAD), idParam, resyncProgram);
+
+// Adding or deleting a curriculum needs the approval of the HOD of that department. The principal's "approve & save" and "delete"
+// create a request (with a message); the HOD approves or rejects it (with a message). Nothing changes before the HOD approves.
+curriculumRouter.get('/requests', authorize(UNIVERSITY_HEAD, HOD), validate(z.object({ status: z.enum(['pending', 'approved', 'rejected', 'cancelled']).optional() }), 'query'), listRequests);
+curriculumRouter.get('/requests/pending-deletes', authorize(UNIVERSITY_HEAD, HOD), pendingByProgram);
+curriculumRouter.get('/requests/:id', authorize(UNIVERSITY_HEAD, HOD), idParam, getRequest);
+curriculumRouter.post('/requests/:id/decide', authorize(HOD), idParam, validate(z.object({ decision: z.enum(['approve', 'reject']), message: z.string().trim().max(1000).optional() })), decideRequest);
+curriculumRouter.post('/requests/:id/cancel', authorize(UNIVERSITY_HEAD), idParam, cancelRequest);
 
 // ---------- HOD: teacher assignment board ----------
 // The board is the HOD's workspace; the principal may open it read-only. Only the HOD can assign.

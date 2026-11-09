@@ -11,6 +11,7 @@ import { extractCurriculum, countSubjects } from '../services/curriculumService.
 import { syncProgramClasses } from '../services/classService.js';
 import { courseBlockerChecks, purgeCourse } from '../services/courseRemoval.js';
 import { findBlockers } from '../utils/blockers.js';
+import { submitAddRequests, submitDeleteRequest } from './curriculumRequestController.js';
 import CourseEnrollment from '../models/CourseEnrollment.js';
 import fs from 'fs';
 import { ROLES, DEPARTMENT_STATUS } from '../config/constants.js';
@@ -130,8 +131,41 @@ export const updateImport = asyncHandler(async (req, res) => {
   sendSuccess(res, imp, 'Draft saved');
 });
 
-// Saving for real: every programme must have a department. An existing programme of the same name is replaced.
+// The principal "approves" the reviewed draft. That does NOT save it: one request per programme goes to the HOD of its
+// department, together with the principal's message. The curriculum reaches the catalogue only when that HOD approves
+// (see curriculumRequestController.js). A rejection leaves everything as it was.
 export const approveImport = asyncHandler(async (req, res) => {
+  const message = String(req.body?.message || '').trim();
+  if (message.length < 3) throw ApiError.badRequest('Please write a short message for the HOD (why this curriculum is being added or replaced)');
+  const imp = await loadImport(req.params.id);
+  if (imp.status !== 'review') throw ApiError.conflict('This import is already finished');
+  if (!imp.programs.length) throw ApiError.badRequest('There is nothing to save. Add at least one programme');
+
+  const plain = imp.toObject().programs;
+  assertDraftConsistent(plain);
+  for (const p of plain) {
+    if (!p.department) throw ApiError.badRequest(`Choose a department for "${p.name}" before saving`);
+    if (!p.semesters.some((s) => s.subjects.length)) throw ApiError.badRequest(`"${p.name}" has no subjects`);
+  }
+  const deptIds = [...new Set(plain.map((p) => String(p.department)))];
+  if ((await Department.countDocuments({ _id: { $in: deptIds }, status: DEPARTMENT_STATUS.ACTIVE })) !== deptIds.length) {
+    throw ApiError.badRequest('A selected department was not found or is not active');
+  }
+
+  const made = await submitAddRequests({ plain, importId: imp._id, message, user: req.user });
+  imp.status = 'approved'; // finished from the principal's side; it is reopened if the HOD rejects it
+  imp.approvedBy = req.user._id;
+  imp.approvedAt = new Date();
+  await imp.save();
+
+  logAudit(req, 'curriculum.submit', 'CurriculumImport', imp._id, { programs: plain.length, subjects: countSubjects(plain) });
+  sendSuccess(res, { requests: made.length, programs: plain.map((p) => p.name), subjects: countSubjects(plain) }, 'Sent to the HOD for approval. Nothing is saved until the HOD approves');
+});
+
+// (old direct version, no longer routed: kept only for reference)
+// Saving for real: every programme must have a department. An existing programme of the same name is replaced.
+// eslint-disable-next-line no-unused-vars
+const approveImportDirect = asyncHandler(async (req, res) => {
   const imp = await loadImport(req.params.id);
   if (imp.status !== 'review') throw ApiError.conflict('This import is already finished');
   if (!imp.programs.length) throw ApiError.badRequest('There is nothing to save. Add at least one programme');
@@ -286,7 +320,21 @@ export const previewProgramDelete = asyncHandler(async (req, res) => {
 //                          EXCEPT classes with real records (attendance, marks, assignments ...). Those stay and are
 //                          only unlinked from the programme, so no academic history is lost.
 //   mode=keep            : every class stays as it is and is just unlinked from the programme.
+// The principal asks to delete a programme. Nothing is deleted: a request goes to the HOD with the principal's message.
 export const deleteProgram = asyncHandler(async (req, res) => {
+  const message = String(req.body?.message || '').trim();
+  if (message.length < 3) throw ApiError.badRequest('Please write a short message for the HOD (why this curriculum should be deleted)');
+  const program = await Program.findById(req.params.id);
+  if (!program) throw ApiError.notFound('Programme not found');
+  const mode = req.query.mode === 'keep' ? 'keep' : 'remove';
+  const r = await submitDeleteRequest({ program, mode, message, user: req.user });
+  logAudit(req, 'curriculum.delete_requested', 'Program', program._id, { name: program.name, mode });
+  sendSuccess(res, { requestId: r._id }, 'Sent to the HOD for approval. Nothing is deleted until the HOD approves');
+});
+
+// (old direct version, no longer routed: the real deletion now happens in curriculumRequestController.js after the HOD approves)
+// eslint-disable-next-line no-unused-vars
+const deleteProgramDirect = asyncHandler(async (req, res) => {
   const program = await Program.findById(req.params.id);
   if (!program) throw ApiError.notFound('Programme not found');
   const mode = req.query.mode === 'keep' ? 'keep' : 'remove';
