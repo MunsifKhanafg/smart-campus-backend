@@ -30,18 +30,21 @@ export const assertCreditHoursAvailable = async ({ course, startMinutes, endMinu
 // Two classes overlap when each one starts before the other ends. Back-to-back classes (10:00-11:00 and 11:00-12:00) are fine.
 // Slots of completed/archived semesters are ignored so old timetables never block new ones.
 export const findSlotConflicts = async ({ teacher, room, day, startMinutes, endMinutes, excludeId }) => {
+  // A class with no teacher yet can never clash on a teacher: only its room is checked.
+  const or = [{ room: room.trim().toUpperCase() }];
+  if (teacher) or.unshift({ teacher });
   const filter = {
     day,
     startMinutes: { $lt: endMinutes },
     endMinutes: { $gt: startMinutes },
-    $or: [{ teacher }, { room: room.trim().toUpperCase() }],
+    $or: or,
   };
   if (excludeId) filter._id = { $ne: excludeId };
 
   const candidates = await TimetableSlot.find(filter).populate('semester', 'status').populate('course', 'code').lean();
   const live = candidates.filter((s) => s.semester && !CLOSED_SEMESTER_STATES.includes(s.semester.status));
   return {
-    teacher: live.filter((s) => String(s.teacher) === String(teacher)),
+    teacher: teacher ? live.filter((s) => String(s.teacher) === String(teacher)) : [],
     room: live.filter((s) => s.room === room.trim().toUpperCase()),
   };
 };
@@ -81,7 +84,9 @@ export const reassignCourseSlots = async (course, newTeacherId) => {
   const slots = await TimetableSlot.find({ course: course._id });
   if (!slots.length) return [];
   if (!newTeacherId) {
-    throw ApiError.badRequest('This course is on the timetable. Remove its timetable slots before removing the teacher');
+    // Removing the teacher keeps the classes on the timetable. They show "No teacher assigned" until a new teacher is chosen.
+    await TimetableSlot.updateMany({ course: course._id }, { teacher: null });
+    return slots;
   }
 
   for (const slot of slots) {

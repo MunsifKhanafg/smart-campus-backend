@@ -23,7 +23,8 @@ const PORT = process.env.PORT || 5000;
 // browser only seeing "Network Error". The connection is retried until it works.
 const server = app.listen(PORT, () => console.log(`Smart Campus API on http://localhost:${PORT}`));
 server.on('error', (err) => {
-  console.error(err.code === 'EADDRINUSE' ? `Port ${PORT} is already in use. Close the other server or change PORT in server/.env.` : `Server error: ${err.message}`);
+  console.error(err.code === 'EADDRINUSE'
+      ? `Port ${PORT} is already used by ANOTHER copy of the server that is still running. That old copy keeps answering, so new features show "Route not found". Close it and start again. In PowerShell: Stop-Process -Force -Id (Get-NetTCPConnection -LocalPort ${PORT}).OwningProcess` : `Server error: ${err.message}`);
   process.exit(1);
 });
 

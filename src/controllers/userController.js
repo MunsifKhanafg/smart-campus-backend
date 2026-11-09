@@ -4,6 +4,7 @@ import { ApiError, asyncHandler, sendSuccess } from '../utils/apiHelpers.js';
 import { assertDepartmentAccess } from '../middleware/auth.js';
 import { logAudit } from '../utils/audit.js';
 import { assertNoBlockers } from '../utils/blockers.js';
+import { teacherDataSummary, purgeTeacher } from '../services/teacherRemoval.js';
 import Course from '../models/Course.js';
 import Attendance from '../models/Attendance.js';
 import CourseTopic from '../models/CourseTopic.js';
@@ -73,37 +74,42 @@ export const setUserActive = asyncHandler(async (req, res) => {
   sendSuccess(res, user, 'User updated');
 });
 
-// Delete a teacher that was added by mistake. Only teachers can be deleted here: an HOD must first be replaced
-// (HOD transfer), and students are deleted from the Students page. A teacher with courses or teaching records is
-// refused with a clear reason; deactivating the account is the safe alternative.
-export const deleteUser = asyncHandler(async (req, res) => {
+// Delete a teacher account. Only teachers can be deleted here: an HOD must first be replaced (HOD transfer), and students are
+// deleted from the Students page. A teacher that is connected to subjects or records is deleted only after the HOD / principal
+// confirmed it in the window (the page sends ?force=true then). Their subjects lose the teacher, their classes leave the
+// timetable, and what they wrote stays in the students' records.
+const loadDeletableTeacher = async (req) => {
   const user = await User.findById(req.params.id);
   if (!user) throw ApiError.notFound('User not found');
   if (String(user._id) === String(req.user._id)) throw ApiError.badRequest('You cannot delete your own account');
   if (user.role === ROLES.HOD) throw ApiError.badRequest('An HOD cannot be deleted. Transfer the HOD role to another teacher first');
   if (user.role !== ROLES.TEACHER) throw ApiError.badRequest('Only teachers can be deleted here. Students are deleted from the Students page');
   assertDepartmentAccess(req.user, user.department);
+  return user;
+};
 
-  const id = user._id;
-  await assertNoBlockers(
-    `Teacher ${user.name}`,
-    [
-      ['assigned courses (remove the teacher from them first)', Course.countDocuments({ teacher: id })],
-      ['timetable classes', TimetableSlot.countDocuments({ teacher: id })],
-      ['attendance sheets', Attendance.countDocuments({ markedBy: id })],
-      ['teaching topics', CourseTopic.countDocuments({ createdBy: id })],
-      ['assignments', Assignment.countDocuments({ createdBy: id })],
-      ['quizzes', Quiz.countDocuments({ createdBy: id })],
-      ['graded submissions', Submission.countDocuments({ gradedBy: id })],
-      ['entered examination marks', ExaminationMarks.countDocuments({ enteredBy: id })],
-    ],
-    'Deactivate the account instead so the records stay intact.'
+// What the teacher is connected to. The delete window shows this before anything is removed.
+export const previewTeacherDelete = asyncHandler(async (req, res) => {
+  const user = await loadDeletableTeacher(req);
+  sendSuccess(res, { name: user.name, ...(await teacherDataSummary(user._id)) });
+});
+
+export const deleteUser = asyncHandler(async (req, res) => {
+  const user = await loadDeletableTeacher(req);
+  const summary = await teacherDataSummary(user._id);
+  if (summary.hasRecords && req.query.force !== 'true') {
+    throw ApiError.conflict(`${user.name} is connected to records (${summary.items.map((i) => `${i.count} ${i.label}`).join(', ')}). Confirm to delete the account.`);
+  }
+  const { unassigned } = await purgeTeacher(user, req.user._id);
+  logAudit(req, 'user.delete', 'User', user._id, {
+    name: user.name, email: user.email, role: user.role, connected: Object.fromEntries(summary.items.map((i) => [i.label, i.count])),
+  });
+  const list = unassigned.map((c) => `${c.code} ${c.title} (${c.semester}, Section ${c.section})`);
+  sendSuccess(
+    res,
+    { unassigned },
+    list.length ? `Teacher deleted. ${list.length} subject${list.length === 1 ? ' has' : 's have'} no teacher now: ${list.join(' · ')}. Their classes stay on the timetable as "No teacher assigned". Assign a new teacher on the Courses page.` : 'Teacher deleted'
   );
-
-  await Promise.all([Notification.deleteMany({ recipient: id }), AIConversation.deleteMany({ user: id })]);
-  await User.deleteOne({ _id: id });
-  logAudit(req, 'user.delete', 'User', id, { name: user.name, email: user.email, role: user.role });
-  sendSuccess(res, null, 'Teacher deleted');
 });
 
 // Full profile of one teacher/HOD for the principal (any department) or an HOD (own department only):

@@ -6,6 +6,9 @@ node_modules/
 .env.*
 !.env.example
 
+# Demo logins written by npm run seed:demo (emails and passwords): never publish this file
+demo-credentials.txt
+
 # Uploaded files (student documents, bank slips, logos, course materials)
 uploads/*
 !uploads/.gitkeep

@@ -152,7 +152,7 @@ export const updateSlot = asyncHandler(async (req, res) => {
   await notifyTimetableChange({
     timetableId: slot.timetable,
     courseIds: [slot.course],
-    extraUserIds: [slot.teacher],
+    extraUserIds: [slot.teacher].filter(Boolean),
     message: `${course?.code || 'A class'} moved to ${fmt(slot)}`,
   });
   sendSuccess(res, await populateSlot(TimetableSlot.findById(slot._id)), 'Class updated');
@@ -172,7 +172,7 @@ export const deleteSlot = asyncHandler(async (req, res) => {
   await notifyTimetableChange({
     timetableId: slot.timetable,
     courseIds: [slot.course],
-    extraUserIds: [slot.teacher],
+    extraUserIds: [slot.teacher].filter(Boolean),
     message: `${course?.code || 'A class'} on ${fmt(slot)} was removed`,
   });
   sendSuccess(res, null, 'Class removed from timetable');
@@ -198,7 +198,7 @@ export const publishTimetable = asyncHandler(async (req, res) => {
     CourseEnrollment.find({ semester: semester._id, status: ENROLLMENT_STATUS.ENROLLED }).distinct('student'),
     TimetableSlot.find({ timetable: timetable._id }).distinct('teacher'),
   ]);
-  await notifyUsers([...students, ...teachers], {
+  await notifyUsers([...students, ...teachers.filter(Boolean)], { // a class whose teacher was deleted has no teacher to tell
     title: 'Timetable published',
     message: `The official timetable for ${semester.name} is now available`,
     type: 'timetable',

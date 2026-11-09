@@ -29,7 +29,7 @@ import {
   setDepartmentStatus,
   assignHod,
 } from '../controllers/departmentController.js';
-import { createUser, listUsers, setUserActive, deleteUser, teacherProfile, resetPassword, changeUserEmail, updateUser } from '../controllers/userController.js';
+import { createUser, listUsers, setUserActive, deleteUser, previewTeacherDelete, teacherProfile, resetPassword, changeUserEmail, updateUser } from '../controllers/userController.js';
 import { loginLimiter } from '../middleware/rateLimit.js';
 
 const { UNIVERSITY_HEAD, HOD } = ROLES;
@@ -68,6 +68,8 @@ userRouter.post('/', validate(createUserSchema), createUser);
 userRouter.patch('/:id/active', idParam, validate(userActiveSchema), setUserActive);
 // Fix a typing mistake in a teacher's name, email, phone or qualification (HOD: own department).
 userRouter.put('/:id', idParam, validate(updateUserSchema), updateUser);
+// What a teacher is connected to (subjects, attendance, assignments ...). The delete window shows it before anything is removed.
+userRouter.get('/:id/delete-preview', idParam, previewTeacherDelete);
 userRouter.delete('/:id', idParam, deleteUser);
 userRouter.get('/:id/profile', idParam, teacherProfile);
 // Forgotten password: the principal (anybody) or an HOD (teachers of their own department) sets a temporary password.

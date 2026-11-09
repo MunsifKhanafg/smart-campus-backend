@@ -10,7 +10,7 @@ import { enrollInCourses } from '../services/enrollmentService.js';
 import { notifyTeacherChange } from '../services/assignmentNotice.js';
 import { fillOutline, backfillOutlines, syncFromCurriculum } from '../services/outlineService.js';
 import { assertNoBlockers } from '../utils/blockers.js';
-import { courseBlockerChecks, purgeCourse } from '../services/courseRemoval.js';
+import { courseDataSummary, purgeCourseDeep } from '../services/courseRemoval.js';
 import { ROLES, SEMESTER_STATUS, COURSE_STATUS } from '../config/constants.js';
 
 const populateCourse = (q) =>
@@ -146,15 +146,27 @@ export const assignTeacher = asyncHandler(async (req, res) => {
   sendSuccess(res, await findCourse(course._id), req.body.teacher ? 'Teacher assigned' : 'Teacher removed');
 });
 
-// Delete a course that was created by mistake. Allowed only while no teaching or exam data exists for it.
-// Its timetable slots, enrollments and AI chats are removed with it. A course with real records must be archived instead.
+// What is inside the subject. The delete window shows this before anything is removed.
+export const previewCourseDelete = asyncHandler(async (req, res) => {
+  const course = await findCourse(req.params.id);
+  assertDepartmentAccess(req.user, course.department._id);
+  sendSuccess(res, { name: `${course.code} - ${course.title}`, ...(await courseDataSummary(course)) });
+});
+
+// Delete a subject.
 export const deleteCourse = asyncHandler(async (req, res) => {
   const course = await findCourse(req.params.id);
   assertDepartmentAccess(req.user, course.department._id);
 
-  await assertNoBlockers(`Course ${course.code}`, courseBlockerChecks(course), 'Archive the course instead so its history is kept.');
-  await purgeCourse(course);
-  logAudit(req, 'course.delete', 'Course', course._id, { code: course.code, title: course.title });
+  const summary = await courseDataSummary(course);
+  if (summary.blocked) throw ApiError.badRequest(summary.blocked);
+  // A subject with attendance, assignments, quizzes ... is only deleted after the HOD confirmed it in the window
+  // (the page sends ?force=true then). Without the confirmation the server refuses and says what is inside.
+  if (summary.hasRecords && req.query.force !== 'true') {
+    throw ApiError.conflict(`${course.code} has records (${summary.items.map((i) => `${i.count} ${i.label}`).join(', ')}). Confirm to delete it together with them.`);
+  }
+  await purgeCourseDeep(course);
+  logAudit(req, 'course.delete', 'Course', course._id, { code: course.code, title: course.title, removed: Object.fromEntries(summary.items.map((i) => [i.label, i.count])) });
   sendSuccess(res, null, 'Course deleted');
 });
 

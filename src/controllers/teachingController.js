@@ -15,7 +15,7 @@ import { subjectsOf, createMissingClasses } from '../services/classService.js';
 import { normalizeTitle, titleScore } from '../services/outlineService.js';
 import TimetableSlot from '../models/TimetableSlot.js';
 import { findBlockers } from '../utils/blockers.js';
-import { courseBlockerChecks, purgeCourse } from '../services/courseRemoval.js';
+import { courseBlockerChecks, courseDataSummary, purgeCourse, purgeCourseDeep } from '../services/courseRemoval.js';
 import { ROLES, COURSE_STATUS, STUDENT_STATUS, CLOSED_SEMESTER_STATES } from '../config/constants.js';
 
 const loadSemester = async (id) => {
@@ -192,19 +192,45 @@ const loadProgram = async (id, semester) => {
   return program;
 };
 
+// What is inside each class (attendance, assignments, quizzes ...). Nothing is changed.
+const previewTakeOut = async (courses) => {
+  const out = [];
+  for (const c of courses) {
+    const s = await courseDataSummary(c);
+    out.push({ code: c.code, title: c.title, section: c.section, hasRecords: s.hasRecords, items: s.items, blocked: s.blocked });
+  }
+  return out;
+};
+
+// A class with records is only deleted after the HOD confirmed it in the window (the page then sends force = true).
+// Checked BEFORE anything is changed, so a refusal never leaves the semester half done.
+const assertConfirmed = async (courses, force) => {
+  if (force) return;
+  const withData = [];
+  for (const c of courses) {
+    const s = await courseDataSummary(c);
+    if (!s.blocked && s.hasRecords) withData.push(`${c.code} (Sec ${c.section}): ${s.items.map((i) => `${i.count} ${i.label}`).join(', ')}`);
+  }
+  if (withData.length) throw ApiError.conflict(`These subjects already have records: ${withData.join('; ')}. Confirm to delete them together with their records.`);
+};
+
 // Takes classes out of a semester so that nothing of them stays on the timetable.
 //   no real records  -> deleted completely (timetable slots and enrollments go with it)
 //   has real records -> archived: its attendance / marks stay for the history, but its timetable slots are removed
-const takeOut = async (courses, semesterName) => {
+const takeOut = async (courses, semesterName, { force = false } = {}) => {
+  await assertConfirmed(courses, force);
   const out = { removed: 0, archived: [] };
   for (const c of courses) {
-    const blockers = await findBlockers(courseBlockerChecks(c));
+    // Saved results are official records: such a class is never deleted, it is archived (its timetable slots still go).
+    const info = await courseDataSummary(c);
+    const blockers = info.blocked ? [[1, 'saved result record(s)']] : [];
     if (blockers.length) {
       await TimetableSlot.deleteMany({ course: c._id });
       await Course.updateOne({ _id: c._id }, { status: COURSE_STATUS.ARCHIVED });
       out.archived.push({ code: c.code, section: c.section, because: blockers.map(([n, label]) => `${n} ${label}`).join(', ') });
     } else {
-      await purgeCourse(c);
+      if (info.hasRecords) await purgeCourseDeep(c); // confirmed by the HOD (force): the subject and all its records
+      else await purgeCourse(c);
       out.removed += 1;
     }
     if (c.teacher) {
@@ -233,7 +259,8 @@ export const withdrawSubject = asyncHandler(async (req, res) => {
   const code = normalizeCode(req.body.code);
   const courses = await Course.find({ semester: semester._id, code }).lean();
   if (!courses.length) throw ApiError.notFound('This subject has no class in the semester');
-  const r = await takeOut(courses, semester.name);
+  if (req.body.preview) return sendSuccess(res, { classes: await previewTakeOut(courses) }, 'Nothing was changed');
+  const r = await takeOut(courses, semester.name, { force: req.body.force });
   logAudit(req, 'teaching.withdraw', 'Semester', semester._id, { code, removed: r.removed, archived: r.archived.length });
   sendSuccess(res, r, `${code} is no longer offered in ${semester.name}`);
 });
@@ -255,7 +282,7 @@ export const replaceSubject = asyncHandler(async (req, res) => {
   const sections = [...new Set(oldCourses.map((c) => c.section))];
   const teacherOf = new Map(oldCourses.filter((c) => c.teacher).map((c) => [c.section, c.teacher]));
 
-  const removed = await takeOut(oldCourses, semester.name);
+  const removed = await takeOut(oldCourses, semester.name, { force: req.body.force });
   const { made, enrolled } = await createMissingClasses({ semester, program, subjects: [target], sections, userId: req.user._id });
 
   if (req.body.keepTeacher) {
@@ -338,8 +365,8 @@ export const matchSemester = asyncHandler(async (req, res) => {
 
   const dropInfo = [];
   for (const d of drop) {
-    const blockers = await findBlockers(courseBlockerChecks(d.course));
-    dropInfo.push({ ...d, archive: blockers.length > 0, because: blockers.map(([n, label]) => `${n} ${label}`).join(', ') });
+    const info = await courseDataSummary(d.course);
+    dropInfo.push({ ...d, archive: !!info.blocked, hasRecords: info.hasRecords, items: info.items, because: info.blocked ? 'saved results' : info.items.map((i) => `${i.count} ${i.label}`).join(', ') });
   }
 
   const plan = {
@@ -348,14 +375,14 @@ export const matchSemester = asyncHandler(async (req, res) => {
     expected: scheme.length,
     keep: [...winners.values()].filter(({ c }) => !fix.some((f) => String(f.course._id) === String(c._id))).map(({ c }) => ({ code: c.code, title: c.title, section: c.section, teacher: c.teacher?.name || null })),
     fix: fix.map((f) => ({ code: f.course.code, title: f.course.title, section: f.course.section, changes: Object.keys(f.patch), to: { code: f.patch.code || f.course.code, title: f.patch.title || f.course.title, creditHours: f.patch.creditHours ?? f.course.creditHours } })),
-    remove: dropInfo.map((d) => ({ code: d.course.code, title: d.course.title, section: d.course.section, teacher: d.course.teacher?.name || null, reason: d.reason, archive: d.archive, because: d.because })),
+    remove: dropInfo.map((d) => ({ code: d.course.code, title: d.course.title, section: d.course.section, teacher: d.course.teacher?.name || null, reason: d.reason, archive: d.archive, hasRecords: d.hasRecords, items: d.items, because: d.because })),
     add: missing.map((s) => ({ code: s.code, title: s.title, creditHours: s.creditHours })),
     sections,
   };
   if (!req.body.apply) return sendSuccess(res, plan, 'Plan ready. Nothing was changed yet');
 
   // 1. remove first, so a corrected code can never collide with a class that is about to disappear
-  const removed = dropInfo.length ? await takeOut(dropInfo.map((d) => ({ ...d.course, teacher: d.course.teacher?._id || null })), semester.name) : { removed: 0, archived: [] };
+  const removed = dropInfo.length ? await takeOut(dropInfo.map((d) => ({ ...d.course, teacher: d.course.teacher?._id || null })), semester.name, { force: req.body.force }) : { removed: 0, archived: [] };
   // 2. fix the classes that stay
   let fixed = 0;
   for (const f of fix) {

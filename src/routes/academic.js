@@ -35,6 +35,7 @@ import {
   assignTeacher,
   setCourseStatus,
   deleteCourse,
+  previewCourseDelete,
   syncCurriculum,
   syncSemesterCurriculum,
 } from '../controllers/courseController.js';
@@ -89,6 +90,7 @@ courseRouter.get('/:id', authorize(UNIVERSITY_HEAD, HOD, TEACHER), idParam, getC
 courseRouter.put('/:id', authorize(HOD), idParam, validate(updateCourseSchema), updateCourse);
 courseRouter.patch('/:id/teacher', authorize(HOD), idParam, validate(assignTeacherSchema), assignTeacher);
 courseRouter.patch('/:id/status', authorize(HOD), idParam, validate(courseStatusSchema), setCourseStatus);
+courseRouter.get('/:id/delete-preview', authorize(HOD), idParam, previewCourseDelete);
 courseRouter.delete('/:id', authorize(HOD), idParam, deleteCourse);
 
 // ---------- BS curriculum (AI-assisted import) ----------

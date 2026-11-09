@@ -50,13 +50,15 @@ export const offerSubjectsSchema = z.object({
   codes: z.array(codeField).min(1).max(40),
   sections: z.array(z.string().trim().toUpperCase().min(1).max(10)).min(1).max(8).default(['A']),
 });
-export const withdrawSubjectSchema = z.object({ semester: objectId, program: objectId, code: codeField });
+// preview = only report what is inside the subject (nothing changes). force = the HOD confirmed deleting it together with its records.
+export const withdrawSubjectSchema = z.object({ semester: objectId, program: objectId, code: codeField, preview: z.boolean().default(false), force: z.boolean().default(false) });
 // Make one semester match the curriculum. apply=false only shows the plan.
 export const matchSemesterSchema = z.object({
   semester: objectId,
   program: objectId.optional(),
   apply: z.boolean().default(false),
   replaceContents: z.boolean().default(false),
+  force: z.boolean().default(false), // the HOD confirmed deleting subjects that have records
 });
 // Swap one offered subject for another one from the same semester of the curriculum.
 export const replaceSubjectSchema = z.object({
@@ -65,4 +67,5 @@ export const replaceSubjectSchema = z.object({
   from: codeField,
   to: codeField,
   keepTeacher: z.boolean().default(true),
+  force: z.boolean().default(false), // the HOD confirmed deleting the old subject together with its records
 });

@@ -15,7 +15,9 @@ const timetableSlotSchema = new mongoose.Schema(
     semester: { type: mongoose.Schema.Types.ObjectId, ref: 'Semester', required: true, index: true },
     course: { type: mongoose.Schema.Types.ObjectId, ref: 'Course', required: true, index: true },
     // Copied from the course. It is kept in sync when the HOD changes the course teacher.
-    teacher: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    // It is empty (null) when the subject has no teacher yet, for example after its teacher was deleted: the class stays on the
+    // timetable and shows "No teacher assigned" until the HOD gives the subject to someone.
+    teacher: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     room: { type: String, required: true, trim: true, uppercase: true, maxlength: 50 },
     day: { type: String, enum: DAYS, required: true },
     startTime: { type: String, required: true, match: [TIME_RX, 'Use HH:MM (24-hour)'] },

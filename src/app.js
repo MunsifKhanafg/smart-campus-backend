@@ -25,12 +25,15 @@ app.set('trust proxy', 1);
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 // Allowed browser origins: CLIENT_URL (comma separated). In development any localhost port is also accepted,
 // because Vite moves to 5174, 5175... when 5173 is busy and the browser would then block every request.
-const allowedOrigins = (process.env.CLIENT_URL || 'http://localhost:5173').split(',').map((s) => s.trim());
+// A trailing "/" is a common typo in CLIENT_URL (https://site.vercel.app/ never matches the browser's https://site.vercel.app), so it is removed.
+const allowedOrigins = (process.env.CLIENT_URL || 'http://localhost:5173').split(',').map((s) => s.trim().replace(/\/+$/, '')).filter(Boolean);
 const localDev = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
 app.use(
   cors({
     origin: (origin, cb) => {
       const ok = !origin || allowedOrigins.includes(origin) || (process.env.NODE_ENV !== 'production' && localDev.test(origin));
+      // Without this line a blocked website is silent: the browser only says "Network Error". Vercel > Logs now names the address to add.
+      if (!ok) console.warn(`CORS: blocked the website ${origin}. Add it to CLIENT_URL (now: ${allowedOrigins.join(', ')})`);
       cb(null, ok);
     },
     credentials: true,
@@ -51,8 +54,11 @@ if (process.env.NODE_ENV !== 'test') app.use(morgan('dev'));
 // lives in uploads/private and is reachable only through protected download routes.
 app.use('/uploads/branding', express.static(BRANDING_DIR, { maxAge: '1d' }));
 
+// The bare address of the server has no page. Say so clearly instead of a confusing "Route not found".
+app.get('/', (_req, res) => res.json({ success: true, message: 'Smart Campus API is running. The website is a separate project. Check /api/health for the database status.' }));
+
 app.get('/api/health', (_req, res) =>
-  res.json({ success: true, message: 'Smart Campus API running', database: dbConnected() ? 'connected' : 'disconnected', problem: dbStatus.lastError || undefined })
+  res.json({ success: true, message: 'Smart Campus API running', startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(), database: dbConnected() ? 'connected' : 'disconnected', problem: dbStatus.lastError || undefined })
 );
 
 // While MongoDB is unreachable every other API call gets a readable 503 (the login page shows this message).
