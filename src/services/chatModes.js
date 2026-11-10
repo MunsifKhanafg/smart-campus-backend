@@ -27,6 +27,8 @@ const ALL = [
     extra: 'Draft questions for the teacher with an answer key and a marking scheme. The teacher reviews and finalises them.' },
   { id: 'rubric', icon: '📊', label: 'Marking rubric', hint: 'Criteria and marks for an assignment', placeholder: 'Describe the assignment and total marks...', who: ['staff'],
     extra: 'Create a clear marking rubric as a table: criteria, what each level looks like, and the marks.' },
+  { id: 'records', icon: '🔎', label: 'Search records', hint: 'Find a student, teacher or course by roll number: attendance, fees, exams', placeholder: 'e.g. CS-S1-03   or   attendance of CS-S1-03   or   fees and exam result of 21CS045', who: [], records: true,
+    extra: 'Answer about the students, teachers and courses in the records data supplied. Show the details asked for, as short sections and tables. Never invent records and never go beyond the data supplied.' },
   { id: 'people', icon: '👥', label: 'Students & teachers', hint: 'Names and details of students, teachers and departments', placeholder: 'e.g. List all teachers with their subjects. Show students of semester 3. Details of student CS-S1-03', who: [], leader: true,
     extra: 'Answer about the students, teachers and departments in the people data supplied. Show lists as tables with the details asked for. Never invent people and never go beyond the data supplied.' },
   { id: 'campus', icon: '🏫', label: 'My courses & teachers', hint: 'Your subjects, teachers, timetable and course contents', placeholder: 'e.g. Who teaches my English class? What is in the course contents of Pakistan Studies?', who: ['student', 'staff'],
@@ -37,15 +39,21 @@ const ALL = [
 export const groupOf = (role) => ROLE_GROUPS[role] || 'student';
 // `leader` options (students & teachers lists) are only for the principal and the HODs.
 const isLeader = (role) => role === 'hod' || role === 'university_head';
-// The finance officer has NO assistant at all: it could otherwise be asked about attendance, marks or other academic information
-// that the finance office must not see. (The routes also refuse finance; this is a second lock.)
-const NO_ASSISTANT = new Set(['finance_officer']);
-export const modesFor = (role) => (NO_ASSISTANT.has(role) ? [] : ALL.filter((m) => m.who.includes(groupOf(role)) || (m.leader && isLeader(role))).map(({ who, extra, leader, ...m }) => m));
+// The assistant is ONLY for the principal, the HODs and the finance office. Students and teachers do not get it at all.
+// The finance office gets only the records search; the principal and HODs get the records search and the other tools.
+// (The routes refuse other roles too; this is a second lock.)
+const ASSISTANT_ROLES = new Set(['university_head', 'hod', 'finance_officer']);
+const strip = ({ who, extra, leader, records, ...m }) => m;
+export const modesFor = (role) => {
+  if (!ASSISTANT_ROLES.has(role)) return [];
+  if (role === 'finance_officer') return ALL.filter((m) => m.records).map(strip);
+  return ALL.filter((m) => m.records || m.who.includes('staff') || (m.leader && isLeader(role))).map(strip);
+};
 export const findMode = (role, id) => modesFor(role).find((m) => m.id === id) || null;
 
 // Data that is put inside <people_data> / <campus_data> comes from the database (names, course contents typed by users...).
 // Remove anything that looks like our own closing tag, so text typed by a user can never end the data block and pretend to be an instruction.
-export const fenceData = (text) => String(text ?? '').replace(/<\/?\s*(people_data|campus_data|materials|excerpt)[^>]*>/gi, '');
+export const fenceData = (text) => String(text ?? '').replace(/<\/?\s*(people_data|campus_data|records_data|materials|excerpt)[^>]*>/gi, '');
 
 const BASE = `You are the AI study and teaching assistant of a university, a helpful conversational assistant like ChatGPT for academic and educational questions.
 You help with any subject: explaining concepts, solving problems step by step, giving examples, summarising, translating (English, Urdu, Roman Urdu), writing and study skills, programming, and education or career guidance.

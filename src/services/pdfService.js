@@ -16,9 +16,16 @@ const start = (res, filename) => {
 
 // University name, campus and logo from the current settings, so a rename shows up on every new document.
 const header = (doc, settings, title) => {
-  const logoFile = settings.logoUrl ? path.join(BRANDING_DIR, path.basename(settings.logoUrl)) : null;
-  const hasLogo = logoFile && /\.(png|jpe?g)$/i.test(logoFile) && fs.existsSync(logoFile); // pdfkit cannot draw webp
-  if (hasLogo) doc.image(logoFile, 40, 36, { fit: [60, 60] });
+  // The logo normally comes from the database (settings.logoData). An older logo FILE in uploads/branding is still understood.
+  let logo = null;
+  if (settings.logoData?.length && /png|jpe?g/i.test(settings.logoMime || '')) logo = Buffer.from(settings.logoData);
+  else if (settings.logoUrl?.startsWith('/uploads/branding/')) {
+    const logoFile = path.join(BRANDING_DIR, path.basename(settings.logoUrl));
+    if (/\.(png|jpe?g)$/i.test(logoFile) && fs.existsSync(logoFile)) logo = logoFile;
+  }
+  if (logo) {
+    try { doc.image(logo, 40, 36, { fit: [60, 60] }); } catch { /* a damaged image must never stop the document */ } // pdfkit cannot draw webp
+  }
   doc.font('Helvetica-Bold').fontSize(18).text(settings.universityName, 40, 40, { align: 'center', width: 515 });
   doc.font('Helvetica').fontSize(10).text(settings.campusName || '', { align: 'center', width: 515 });
   if (settings.address) doc.text(settings.address, { align: 'center', width: 515 });

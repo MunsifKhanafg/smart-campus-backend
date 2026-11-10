@@ -20,7 +20,7 @@ import {
   updateUserSchema,
 } from '../validators/schemas.js';
 import { login, me, changePassword, updateAccount } from '../controllers/authController.js';
-import { getPublicSettings, getSettings, updateSettings, uploadLogoFile } from '../controllers/settingsController.js';
+import { getPublicSettings, getSettings, updateSettings, uploadLogoFile, sendLogo } from '../controllers/settingsController.js';
 import {
   listDepartments,
   getDepartment,
@@ -45,6 +45,7 @@ authRouter.patch('/account', protect, validate(updateAccountSchema), updateAccou
 // ---------- Settings ----------
 export const settingsRouter = Router();
 settingsRouter.get('/public', getPublicSettings); // no login needed (login page, contact page)
+settingsRouter.get('/logo', sendLogo); // the logo picture, stored in the database (no login: the login page shows it)
 settingsRouter.use(protect, authorize(UNIVERSITY_HEAD));
 settingsRouter.get('/', getSettings);
 settingsRouter.put('/', validate(updateSettingsSchema), updateSettings);

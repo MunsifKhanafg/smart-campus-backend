@@ -17,6 +17,10 @@ const universitySettingsSchema = new mongoose.Schema(
     universityName: { type: String, default: 'Smart Campus University', trim: true, maxlength: 150 },
     campusName: { type: String, default: 'Main Campus', trim: true, maxlength: 150 },
     logoUrl: { type: String, default: '' },
+    // The logo itself lives in the database, not on the server's disk. On Vercel the disk is wiped at every restart, which made
+    // the logo disappear after a refresh. It is small (2 MB at most) and is read only by GET /api/settings/logo, never in other API answers.
+    logoData: { type: Buffer, select: false },
+    logoMime: { type: String, default: '' },
     address: { type: String, default: '', trim: true },
     contactNumber: { type: String, default: '', trim: true },
     email: { type: String, default: '', trim: true, lowercase: true },
@@ -111,11 +115,14 @@ const universitySettingsSchema = new mongoose.Schema(
 );
 
 // Always returns the single settings document, creating defaults on first call.
+// The logo picture is loaded with it so PDF documents (DMC, receipts, admit cards) can print it, but it is never sent to the
+// browser as part of the settings (see the toJSON rule below). The browser gets it from GET /api/settings/logo.
 universitySettingsSchema.statics.getSettings = async function () {
-  let doc = await this.findOne({ key: 'global' });
+  let doc = await this.findOne({ key: 'global' }).select('+logoData');
   if (!doc) doc = await this.create({ key: 'global' });
   return doc;
 };
+universitySettingsSchema.set('toJSON', { transform: (_doc, ret) => { delete ret.logoData; return ret; } });
 
 // A different weekly holiday changes which days can be taught: the dated course contents are calculated again.
 universitySettingsSchema.pre('save', function (next) {

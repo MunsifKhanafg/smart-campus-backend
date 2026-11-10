@@ -5,6 +5,8 @@
 // UTC midnight, so using UTC everywhere means a day never shifts because of the server's time zone.
 // ============================================================================================
 
+import { DEFAULT_SEMESTER_WEEKS } from './semesterDates.js';
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']; // Date#getUTCDay order
 
@@ -14,7 +16,8 @@ export const NON_TEACHING_EVENT_TYPES = ['holiday', 'midterm_exam', 'final_exam'
 
 export const DEFAULT_WEEKLY_OFF = ['sunday'];
 export const DEFAULT_TEACHING_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-export const DEFAULT_SEMESTER_WEEKS = 16;
+// One default for the whole system: semesterDates.js (the Semester model uses the same value).
+export { DEFAULT_SEMESTER_WEEKS };
 
 export const dateKey = (d) => new Date(d).toISOString().slice(0, 10);
 export const fromKey = (key) => new Date(`${key}T00:00:00.000Z`);

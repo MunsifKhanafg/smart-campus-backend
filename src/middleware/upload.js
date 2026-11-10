@@ -26,14 +26,10 @@ ensureDir(PRIVATE_ROOT);
 
 const ALLOWED = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp' };
 
-// Random filename + extension taken from the verified MIME type (never from the user's filename).
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, BRANDING_DIR),
-  filename: (_req, file, cb) => cb(null, `logo-${crypto.randomBytes(12).toString('hex')}${ALLOWED[file.mimetype]}`),
-});
-
+// The logo is kept in memory first and then saved INSIDE the database (see controllers/settingsController.js), so it survives
+// server restarts on Vercel, where the disk is temporary.
 export const uploadLogo = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 2 * 1024 * 1024, files: 1 },
   fileFilter: (_req, file, cb) =>
     ALLOWED[file.mimetype] ? cb(null, true) : cb(ApiError.badRequest('Logo must be a PNG, JPG or WEBP image')),
