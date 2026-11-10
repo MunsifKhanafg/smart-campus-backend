@@ -20,6 +20,14 @@ const userSchema = new mongoose.Schema(
     phone: { type: String, trim: true },
     // Teachers and HODs: highest degree or specialisation, shown to the principal and the HOD when subjects are assigned.
     qualification: { type: String, trim: true, maxlength: 200, default: '' },
+    // Subjects this teacher can teach (free text, for example "English", "Mathematics", "Data Structures"). When a teacher is chosen for
+    // a subject, the list shows the teachers whose subjects fit it.
+    subjects: { type: [String], default: [] },
+    // Other departments this teacher also teaches in (common subjects such as English or Islamiat are taught everywhere).
+    // The HOD of such a department can give this teacher classes, without a second account.
+    extraDepartments: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Department' }],
+    // Weekly teaching hours the administrator allows for this teacher. Empty = no limit has been set.
+    maxWeeklyHours: { type: Number, min: 1, max: 60, default: null },
     isActive: { type: Boolean, default: true },
     mustChangePassword: { type: Boolean, default: false },
     passwordChangedAt: Date,

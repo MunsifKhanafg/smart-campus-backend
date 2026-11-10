@@ -41,6 +41,7 @@ const courseFields = {
   title: z.string().trim().min(2).max(150),
   code: z.string().trim().min(2).max(20),
   creditHours: z.number().int().min(1).max(6),
+  weeklyClasses: z.number().int().min(1).max(20).nullable().optional(), // classes per week; empty = the credit hours
   description: z.string().max(2000).optional(),
   outline: z.string().max(10000).optional(),
   section: z.string().trim().min(1).max(10).optional(),

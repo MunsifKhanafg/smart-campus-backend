@@ -40,6 +40,8 @@ export const assignSubjectSchema = z.object({
   code: z.string().trim().min(2).max(20),
   section: z.string().trim().toUpperCase().max(10).default('A'),
   teacher: objectId.nullable(),
+  // How many classes per week this subject is taught. Omit = leave as it is; null = back to the credit hours.
+  weeklyClasses: z.number().int().min(1).max(20).nullable().optional(),
 });
 
 // ---------- HOD: choose WHICH subjects of a semester are offered (for example 5 of the 21 subjects of semester 7) ----------

@@ -9,20 +9,23 @@ import { CLOSED_SEMESTER_STATES, ENROLLMENT_STATUS, TIMETABLE_STATUS } from '../
 export const CONTACT_MINUTES_PER_CREDIT = 60;
 const hm = (min) => `${Math.floor(min / 60)}h${min % 60 ? ` ${min % 60}m` : ''}`;
 
-// A course may only be scheduled for as many weekly minutes as its credit hours allow.
+// A course may only be scheduled for as many weekly hours as it is taught per week. That is the number of "classes per week" the HOD
+// set on the subject; when it is empty, the credit hours. There is no fixed 3 any more: a subject with 3 credit hours can be taught
+// 4, 6 or 8 times a week when the real workload needs it.
 // Throws a clear message when the credit hours are already complete, or when the new class would exceed them.
 export const assertCreditHoursAvailable = async ({ course, startMinutes, endMinutes, excludeId }) => {
-  const limit = (course.creditHours || 0) * CONTACT_MINUTES_PER_CREDIT;
+  const perWeek = course.weeklyClasses || course.creditHours || 0;
+  const limit = perWeek * CONTACT_MINUTES_PER_CREDIT;
   const filter = { course: course._id };
   if (excludeId) filter._id = { $ne: excludeId };
   const slots = await TimetableSlot.find(filter).select('startMinutes endMinutes').lean();
   const used = slots.reduce((s, x) => s + (x.endMinutes - x.startMinutes), 0);
   const adding = endMinutes - startMinutes;
   if (used >= limit) {
-    throw ApiError.conflict(`Credit hours complete. ${course.code} has ${course.creditHours} credit hour(s) (${hm(limit)} per week) and all of it is already on the timetable`);
+    throw ApiError.conflict(`All ${perWeek} weekly class(es) of ${course.code} (${hm(limit)} per week) are already on the timetable. To teach it more often, raise "Classes per week" on the subject`);
   }
   if (used + adding > limit) {
-    throw ApiError.conflict(`Only ${hm(limit - used)} per week is left for ${course.code} (${course.creditHours} credit hours). This class is ${hm(adding)} long, so please shorten it`);
+    throw ApiError.conflict(`Only ${hm(limit - used)} per week is left for ${course.code} (${perWeek} class(es) per week). This class is ${hm(adding)} long, so please shorten it or raise "Classes per week" on the subject`);
   }
 };
 

@@ -21,6 +21,14 @@ const contactSchema = z
   })
   .optional();
 
+// Teachers: the subjects they can teach, the other departments they also teach in (common subjects such as English or
+// Mathematics are taught everywhere), and the weekly teaching hours the administrator allows (null = no limit).
+const teachingFields = {
+  subjects: z.array(z.string().trim().min(1).max(80)).max(30).optional(),
+  extraDepartments: z.array(objectId).max(20).optional(),
+  maxWeeklyHours: z.number().int().min(1).max(60).nullable().optional(),
+};
+
 export const createDepartmentSchema = z.object({
   name: z.string().trim().min(2).max(150),
   code: z.string().trim().min(2).max(12),
@@ -40,6 +48,7 @@ export const createUserSchema = z.object({
   password: z.string().min(8).max(72),
   // Students are created from the Students page (POST /api/students) so a login and a profile always exist together.
   role: z.enum([ROLES.FINANCE_OFFICER, ROLES.TEACHER]),
+  ...teachingFields,
   department: objectId.optional(),
   phone: z.string().max(30).optional(),
   qualification: z.string().trim().max(200).optional(),
@@ -63,6 +72,7 @@ export const resetPasswordSchema = z.object({ temporaryPassword: z.string().min(
 
 // An HOD (own department) or the principal corrects a teacher's name, email, phone or qualification after a typing mistake.
 export const updateUserSchema = z.object({
+  ...teachingFields,
   name: z.string().trim().min(2).max(100).optional(),
   email: z.string().trim().toLowerCase().email().max(120).optional(),
   phone: z.string().trim().max(30).optional(),
@@ -73,6 +83,7 @@ export const listUsersQuery = z.object({
   role: z.enum(Object.values(ROLES)).optional(),
   department: objectId.optional(),
   search: z.string().max(100).optional(),
+  includeShared: z.enum(['true']).optional(), // also list teachers of other departments who are allowed to teach in this one
 });
 
 export const userActiveSchema = z.object({ isActive: z.boolean() });

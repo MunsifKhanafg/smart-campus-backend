@@ -5,6 +5,7 @@ import { assertDepartmentAccess } from '../middleware/auth.js';
 import { logAudit } from '../utils/audit.js';
 import { assertNoBlockers } from '../utils/blockers.js';
 import { teacherDataSummary, purgeTeacher } from '../services/teacherRemoval.js';
+import { teachesIn, cleanSubjects, cleanExtraDepartments } from '../services/teacherService.js';
 import Course from '../models/Course.js';
 import Attendance from '../models/Attendance.js';
 import CourseTopic from '../models/CourseTopic.js';
@@ -37,24 +38,34 @@ export const createUser = asyncHandler(async (req, res) => {
     deptId = undefined;
   }
 
-  const user = await User.create({ ...req.body, department: deptId, mustChangePassword: true });
+  // A teacher's subjects and the other departments they also teach in (the HOD of those departments can give them classes).
+  const teaching = {};
+  if (role === ROLES.TEACHER) {
+    teaching.subjects = cleanSubjects(req.body.subjects);
+    teaching.extraDepartments = await cleanExtraDepartments(req.body.extraDepartments, deptId);
+  } else {
+    delete req.body.maxWeeklyHours; // only teachers have a weekly teaching limit
+  }
+  const user = await User.create({ ...req.body, ...teaching, department: deptId, mustChangePassword: true });
   logAudit(req, 'user.create', 'User', user._id, { role, department: deptId });
   sendSuccess(res, user, 'User created', 201);
 });
 
 export const listUsers = asyncHandler(async (req, res) => {
-  const { role, department, search } = req.query;
-  const filter = {};
-  if (req.user.role === ROLES.UNIVERSITY_HEAD) {
-    if (department) filter.department = department;
-  } else {
-    filter.department = req.user.department; // HOD sees only their department
+  const { role, department, search, includeShared } = req.query;
+  const and = [];
+  // The department being looked at: the principal chooses one (or none = everybody), an HOD always sees their own.
+  const dept = req.user.role === ROLES.UNIVERSITY_HEAD ? department : req.user.department;
+  if (dept) {
+    // includeShared: also teachers of OTHER departments who are allowed to teach here (common subjects such as English)
+    and.push(includeShared === 'true' ? { $or: [{ department: dept }, { extraDepartments: dept }] } : { department: dept });
   }
-  if (role) filter.role = role;
+  if (role) and.push({ role });
   if (search) {
     const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    filter.$or = [{ name: rx }, { email: rx }];
+    and.push({ $or: [{ name: rx }, { email: rx }] });
   }
+  const filter = and.length ? { $and: and } : {};
   const users = await User.find(filter).populate('department', 'name code').sort({ name: 1 }).limit(200);
   sendSuccess(res, users);
 });
@@ -115,11 +126,15 @@ export const deleteUser = asyncHandler(async (req, res) => {
 // Full profile of one teacher/HOD for the principal (any department) or an HOD (own department only):
 // contact details, qualification and every subject they teach with the number of students in it.
 export const teacherProfile = asyncHandler(async (req, res) => {
-  const user = await User.findById(req.params.id).populate('department', 'name code');
+  const user = await User.findById(req.params.id).populate('department', 'name code').populate('extraDepartments', 'name code');
   if (!user || ![ROLES.TEACHER, ROLES.HOD].includes(user.role)) throw ApiError.notFound('Teacher not found');
-  assertDepartmentAccess(req.user, user.department?._id);
+  // The HOD of a department the teacher is shared with may open the profile too (but sees only the classes of their own department).
+  if (!(req.user.role === ROLES.HOD && teachesIn(user, req.user.department))) assertDepartmentAccess(req.user, user.department?._id);
 
-  const courses = await Course.find({ teacher: user._id })
+  const courseFilter = { teacher: user._id };
+  if (req.user.role === ROLES.HOD && String(user.department?._id) !== String(req.user.department)) courseFilter.department = req.user.department;
+  const courses = await Course.find(courseFilter)
+    .populate('department', 'name code')
     .populate('semester', 'name number academicYear status')
     .sort({ createdAt: -1 })
     .lean();
@@ -129,7 +144,7 @@ export const teacherProfile = asyncHandler(async (req, res) => {
   ]);
   const size = new Map(sizes.map((s) => [String(s._id), s.n]));
   const rows = courses.map((c) => ({
-    _id: c._id, code: c.code, title: c.title, section: c.section, creditHours: c.creditHours, status: c.status,
+    _id: c._id, code: c.code, title: c.title, section: c.section, creditHours: c.creditHours, weeklyClasses: c.weeklyClasses || null, department: c.department, status: c.status,
     semester: c.semester, students: size.get(String(c._id)) || 0,
   }));
   const current = rows.filter((c) => c.status === 'active' && !['completed', 'archived'].includes(c.semester?.status));
@@ -139,6 +154,8 @@ export const teacherProfile = asyncHandler(async (req, res) => {
     totals: {
       courses: current.length,
       creditHours: current.reduce((s, c) => s + (c.creditHours || 0), 0),
+      weeklyHours: current.reduce((s, c) => s + (c.weeklyClasses || c.creditHours || 0), 0), // classes per week, what the weekly limit is measured against
+      maxWeeklyHours: user.maxWeeklyHours || null,
       students: current.reduce((s, c) => s + c.students, 0),
     },
   });
@@ -157,7 +174,7 @@ export const updateUser = asyncHandler(async (req, res) => {
     if (user.role !== ROLES.TEACHER) throw ApiError.forbidden('An HOD can correct the details of teachers of their own department only');
   }
 
-  const { name, email, phone, qualification } = req.body;
+  const { name, email, phone, qualification, subjects, extraDepartments, maxWeeklyHours } = req.body;
   const changed = [];
   if (email !== undefined && email !== user.email) {
     if (await User.exists({ email, _id: { $ne: user._id } })) throw ApiError.conflict('Another account already uses this email');
@@ -167,6 +184,22 @@ export const updateUser = asyncHandler(async (req, res) => {
   if (name !== undefined && name !== user.name) { user.name = name; changed.push('name'); }
   if (phone !== undefined && phone !== user.phone) { user.phone = phone; changed.push('phone'); }
   if (qualification !== undefined && qualification !== user.qualification) { user.qualification = qualification; changed.push('qualification'); }
+  // What the person teaches, where, and how many hours a week the administrator allows (empty = no limit).
+  if (subjects !== undefined) { user.subjects = cleanSubjects(subjects); changed.push('subjects'); }
+  if (maxWeeklyHours !== undefined && maxWeeklyHours !== user.maxWeeklyHours) { user.maxWeeklyHours = maxWeeklyHours; changed.push('weekly hours limit'); }
+  if (extraDepartments !== undefined) {
+    const next = await cleanExtraDepartments(extraDepartments, user.department);
+    const removed = (user.extraDepartments || []).filter((d) => !next.some((n) => String(n) === String(d)));
+    if (removed.length) {
+      // A department cannot be taken away while the teacher still has running classes there.
+      const running = await Course.find({ teacher: user._id, department: { $in: removed }, status: 'active' }).populate('semester', 'status').lean();
+      if (running.some((c) => c.semester && !['completed', 'archived'].includes(c.semester.status))) {
+        throw ApiError.conflict('This teacher still has classes in a department you are removing. Give those classes to another teacher first');
+      }
+    }
+    user.extraDepartments = next;
+    changed.push('other departments');
+  }
   if (!changed.length) throw ApiError.badRequest('Nothing was changed');
   await user.save();
 

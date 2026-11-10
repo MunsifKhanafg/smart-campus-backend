@@ -11,6 +11,7 @@ import { listMine, listManaged, createAnnouncement, deleteAnnouncement } from '.
 import { contactInfo } from '../controllers/publicController.js';
 import { overview } from '../controllers/reportController.js';
 import { ask, listConversations, getConversation, myPerformance, coursePerformance, departmentPerformance } from '../controllers/assistantController.js';
+import { listModes, chat, removeConversation, renameConversation } from '../controllers/chatController.js';
 
 const { UNIVERSITY_HEAD, HOD, FINANCE_OFFICER, TEACHER, STUDENT } = ROLES;
 const idParam = validate(z.object({ id: objectId }), 'params');
@@ -48,12 +49,24 @@ const askSchema = z.object({ course: objectId, question: z.string().trim().min(3
 const deptPerfQuery = z.object({ department: objectId.optional(), semester: objectId.optional() });
 const convoQuery = z.object({ course: objectId.optional() });
 const planQuery = z.object({ plan: z.enum(['true', 'false']).optional() });
+const chatSchema = z.object({
+  message: z.string().trim().min(1).max(4000),
+  conversationId: objectId.optional(),
+  mode: z.string().trim().max(20).optional(),
+  course: objectId.optional(),
+});
+const renameSchema = z.object({ title: z.string().trim().min(1).max(80) });
 
 export const aiRouter = Router();
 aiRouter.use(protect);
 aiRouter.post('/ask', authorize(STUDENT, TEACHER, HOD, UNIVERSITY_HEAD), aiLimiter, validate(askSchema), ask);
 aiRouter.get('/conversations', authorize(STUDENT, TEACHER, HOD, UNIVERSITY_HEAD), validate(convoQuery, 'query'), listConversations);
 aiRouter.get('/conversations/:id', authorize(STUDENT, TEACHER, HOD, UNIVERSITY_HEAD), idParam, getConversation);
+// General AI assistant (ChatGPT-like): menu of tools, one message per request, rename and delete chats.
+aiRouter.get('/modes', authorize(STUDENT, TEACHER, HOD, UNIVERSITY_HEAD), listModes);
+aiRouter.post('/chat', authorize(STUDENT, TEACHER, HOD, UNIVERSITY_HEAD), aiLimiter, validate(chatSchema), chat);
+aiRouter.patch('/conversations/:id', authorize(STUDENT, TEACHER, HOD, UNIVERSITY_HEAD), idParam, validate(renameSchema), renameConversation);
+aiRouter.delete('/conversations/:id', authorize(STUDENT, TEACHER, HOD, UNIVERSITY_HEAD), idParam, removeConversation);
 aiRouter.get('/performance/me', authorize(STUDENT), aiLimiter, validate(planQuery, 'query'), myPerformance);
 aiRouter.get('/performance/department', authorize(HOD, UNIVERSITY_HEAD), validate(deptPerfQuery, 'query'), departmentPerformance);
 aiRouter.get('/performance/course/:courseId', authorize(TEACHER, HOD, UNIVERSITY_HEAD), courseParam, coursePerformance);

@@ -10,6 +10,7 @@ import { enrollInCourses } from '../services/enrollmentService.js';
 import { notifyTeacherChange } from '../services/assignmentNotice.js';
 import { fillOutline, backfillOutlines, syncFromCurriculum } from '../services/outlineService.js';
 import { assertNoBlockers } from '../utils/blockers.js';
+import { teachesIn, assertWithinWeeklyLimit } from '../services/teacherService.js';
 import { courseDataSummary, purgeCourseDeep } from '../services/courseRemoval.js';
 import { ROLES, SEMESTER_STATUS, COURSE_STATUS } from '../config/constants.js';
 
@@ -37,14 +38,15 @@ const assertCourseAccess = (user, course) => {
 };
 
 // The teacher must be an active teacher/HOD of the SAME department as the course.
-const validateTeacher = async (teacherId, departmentId) => {
+const validateTeacher = async (teacherId, departmentId, forCourse = null) => {
   const teacher = await User.findById(teacherId);
   if (!teacher || !teacher.isActive || ![ROLES.TEACHER, ROLES.HOD].includes(teacher.role)) {
     throw ApiError.badRequest('Selected teacher not found or inactive');
   }
-  if (String(teacher.department) !== String(departmentId)) {
-    throw ApiError.badRequest('Teacher must belong to the same department as the course');
+  if (!teachesIn(teacher, departmentId)) {
+    throw ApiError.badRequest('This teacher does not work in the department of the course. Add the department under the teacher\'s "Also teaches in" list (Users > Edit)');
   }
+  if (forCourse) await assertWithinWeeklyLimit(teacher, forCourse); // the weekly limit the administrator set for this teacher (none = no limit)
   return teacher;
 };
 
@@ -92,7 +94,7 @@ export const createCourse = asyncHandler(async (req, res) => {
     throw ApiError.badRequest(`Cannot add courses to a ${semester.status} semester`);
   }
   assertWithinSemester(semester, startDate, endDate);
-  if (teacher) await validateTeacher(teacher, semester.department);
+  if (teacher) await validateTeacher(teacher, semester.department, { code: rest.code, creditHours: rest.creditHours, weeklyClasses: rest.weeklyClasses });
 
   const course = await Course.create({
     ...rest,
@@ -133,7 +135,8 @@ export const assignTeacher = asyncHandler(async (req, res) => {
   if (course.status === COURSE_STATUS.ARCHIVED) throw ApiError.badRequest('Archived courses cannot be changed');
 
   const previous = course.teacher?._id;
-  if (req.body.teacher) await validateTeacher(req.body.teacher, course.department._id);
+  if (req.body.teacher && String(previous || '') !== String(req.body.teacher)) await validateTeacher(req.body.teacher, course.department._id, course);
+  else if (req.body.teacher) await validateTeacher(req.body.teacher, course.department._id);
   // If the course is already on the timetable, its slots move to the new teacher (or the change is refused on a clash).
   if (String(previous || '') !== String(req.body.teacher || '')) await reassignCourseSlots(course, req.body.teacher);
   course.teacher = req.body.teacher;

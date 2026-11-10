@@ -15,6 +15,7 @@ import { subjectsOf, createMissingClasses } from '../services/classService.js';
 import { normalizeTitle, titleScore } from '../services/outlineService.js';
 import TimetableSlot from '../models/TimetableSlot.js';
 import { findBlockers } from '../utils/blockers.js';
+import { eligibleTeacherQuery, teachesIn, assertWithinWeeklyLimit } from '../services/teacherService.js';
 import { courseBlockerChecks, courseDataSummary, purgeCourse, purgeCourseDeep } from '../services/courseRemoval.js';
 import { ROLES, COURSE_STATUS, STUDENT_STATUS, CLOSED_SEMESTER_STATES } from '../config/constants.js';
 
@@ -44,7 +45,8 @@ export const board = asyncHandler(async (req, res) => {
   const codes = subjects.map((s) => s.code);
   const [courses, teachers] = await Promise.all([
     Course.find({ semester: semester._id }).populate('teacher', 'name email').lean(),
-    User.find({ department: deptId, role: { $in: [ROLES.TEACHER, ROLES.HOD] }, isActive: true }).select('name email phone qualification role').sort({ name: 1 }).lean(),
+    // The department's own teachers AND teachers of other departments who are allowed to teach here (common subjects).
+    User.find(eligibleTeacherQuery(deptId)).select('name email phone qualification role subjects maxWeeklyHours department').populate('department', 'name code').sort({ name: 1 }).lean(),
   ]);
 
   const load = await Course.find({ teacher: { $in: teachers.map((t) => t._id) }, status: COURSE_STATUS.ACTIVE })
@@ -61,7 +63,7 @@ export const board = asyncHandler(async (req, res) => {
       subject: sub,
       classes: courses
         .filter((c) => c.code === sub.code)
-        .map((c) => ({ _id: c._id, section: c.section, status: c.status, teacher: c.teacher ? { _id: c.teacher._id, name: c.teacher.name } : null })),
+        .map((c) => ({ _id: c._id, section: c.section, status: c.status, weeklyClasses: c.weeklyClasses || null, teacher: c.teacher ? { _id: c.teacher._id, name: c.teacher.name } : null })),
     })),
     otherClasses: courses.filter((c) => !codes.includes(c.code)).length,
     teachers: teachers.map((t) => {
@@ -69,6 +71,8 @@ export const board = asyncHandler(async (req, res) => {
       return {
         ...t,
         creditHours: mine.reduce((n, c) => n + (c.creditHours || 0), 0),
+        weeklyHours: mine.reduce((n, c) => n + (c.weeklyClasses || c.creditHours || 0), 0), // classes per week, what the weekly limit is measured against
+        home: String(t.department?._id) === String(deptId), // false = a teacher of another department who also teaches here
         assignments: mine.map((c) => ({ _id: c._id, code: c.code, title: c.title, section: c.section, creditHours: c.creditHours, semester: c.semester?.name })),
       };
     }),
@@ -127,7 +131,7 @@ export const assignSubject = asyncHandler(async (req, res) => {
   if (req.body.teacher) {
     teacher = await User.findById(req.body.teacher);
     if (!teacher || !teacher.isActive || ![ROLES.TEACHER, ROLES.HOD].includes(teacher.role)) throw ApiError.badRequest('Selected teacher not found or inactive');
-    if (String(teacher.department) !== String(semester.department._id)) throw ApiError.badRequest('Teacher must belong to the same department');
+    if (!teachesIn(teacher, semester.department._id)) throw ApiError.badRequest('This teacher does not work in this department. Add the department under the teacher\'s "Also teaches in" list (Users > Edit)');
   }
 
   let course = await Course.findOne({ semester: semester._id, code: subject.code, section });
@@ -150,6 +154,11 @@ export const assignSubject = asyncHandler(async (req, res) => {
   } else if (course.status === COURSE_STATUS.ARCHIVED) {
     throw ApiError.badRequest('This class is archived. Activate it from Courses first');
   }
+
+  // Classes per week: the HOD sets how often this subject is taught (empty = its credit hours). Then the teacher's weekly limit,
+  // if the administrator set one, is checked against the real number of classes.
+  if (req.body.weeklyClasses !== undefined) course.weeklyClasses = req.body.weeklyClasses;
+  if (teacher && (created || String(course.teacher || '') !== String(teacher._id) || req.body.weeklyClasses !== undefined)) await assertWithinWeeklyLimit(teacher, course);
 
   const previous = course.teacher ? String(course.teacher) : null;
   const next = teacher ? String(teacher._id) : null;

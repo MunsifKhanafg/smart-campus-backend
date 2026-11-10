@@ -128,7 +128,7 @@ export const updateSlot = asyncHandler(async (req, res) => {
   const endMinutes = toMinutes(next.endTime);
   if (endMinutes <= startMinutes) throw ApiError.badRequest('End time must be after the start time');
 
-  const slotCourse = await Course.findById(slot.course).select('code creditHours section');
+  const slotCourse = await Course.findById(slot.course).select('code creditHours weeklyClasses section');
   if (slotCourse) {
     await assertCreditHoursAvailable({ course: slotCourse, startMinutes, endMinutes, excludeId: slot._id });
     await assertSectionFree({ semesterId: slot.semester._id, section: slotCourse.section, day: next.day, startMinutes, endMinutes, excludeId: slot._id });
@@ -259,7 +259,8 @@ export const generateTimetable = asyncHandler(async (req, res) => {
     .filter((c) => c.teacher)
     .map((c) => ({
       id: String(c._id), code: c.code, teacher: String(c.teacher._id), group: `${semester._id}|${c.section}`,
-      sessions: Math.max(0, (c.creditHours || 0) - Math.round((ownMinutes.get(String(c._id)) || 0) / 60)),
+      // classes per week set by the HOD, or the credit hours when nothing was set (no fixed number)
+      sessions: Math.max(0, (c.weeklyClasses || c.creditHours || 0) - Math.round((ownMinutes.get(String(c._id)) || 0) / 60)),
     }))
     .filter((l) => l.sessions > 0);
 

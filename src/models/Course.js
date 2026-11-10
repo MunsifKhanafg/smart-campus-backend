@@ -9,6 +9,9 @@ const courseSchema = new mongoose.Schema(
     department: { type: mongoose.Schema.Types.ObjectId, ref: 'Department', required: true, index: true },
     semester: { type: mongoose.Schema.Types.ObjectId, ref: 'Semester', required: true, index: true },
     creditHours: { type: Number, required: true, min: 1, max: 6 },
+    // How many classes per week this subject is taught. Empty = as many as its credit hours (3 credit hours = 3 classes).
+    // Colleges that teach more (or fewer) classes per week than the credit hours set it here, and the timetable follows it.
+    weeklyClasses: { type: Number, min: 1, max: 20, default: null },
     description: { type: String, trim: true, maxlength: 2000, default: '' },
     outline: { type: String, trim: true, maxlength: 10000, default: '' },
     section: { type: String, trim: true, uppercase: true, maxlength: 10, default: 'A' },

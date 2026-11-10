@@ -35,7 +35,7 @@ export const ask = asyncHandler(async (req, res) => {
 export const listConversations = asyncHandler(async (req, res) => {
   const filter = { user: req.user._id };
   if (req.query.course) filter.course = req.query.course;
-  sendSuccess(res, await AIConversation.find(filter).select('title course updatedAt').sort({ updatedAt: -1 }).limit(50));
+  sendSuccess(res, await AIConversation.find(filter).select('title course mode updatedAt').sort({ updatedAt: -1 }).limit(50));
 });
 
 export const getConversation = asyncHandler(async (req, res) => {
