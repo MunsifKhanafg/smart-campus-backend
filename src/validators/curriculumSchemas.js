@@ -42,6 +42,8 @@ export const assignSubjectSchema = z.object({
   teacher: objectId.nullable(),
   // How many classes per week this subject is taught. Omit = leave as it is; null = back to the credit hours.
   weeklyClasses: z.number().int().min(1).max(20).nullable().optional(),
+  // The teacher is from another department and is not yet permitted to teach here. The HOD confirmed giving that permission.
+  grantPermission: z.boolean().optional(),
 });
 
 // ---------- HOD: choose WHICH subjects of a semester are offered (for example 5 of the 21 subjects of semester 7) ----------

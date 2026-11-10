@@ -17,6 +17,7 @@ import { ROLES, COURSE_STATUS, DEPARTMENT_STATUS, CLOSED_SEMESTER_STATES } from 
 
 // Does this teacher work in that department (home department or one of the extra ones)?
 export const teachesIn = (teacher, departmentId) =>
+  !!teacher.allDepartments ||
   String(teacher.department?._id || teacher.department) === String(departmentId) ||
   (teacher.extraDepartments || []).some((d) => String(d._id || d) === String(departmentId));
 
@@ -24,8 +25,19 @@ export const teachesIn = (teacher, departmentId) =>
 export const eligibleTeacherQuery = (departmentId) => ({
   role: { $in: [ROLES.TEACHER, ROLES.HOD] },
   isActive: true,
-  $or: [{ department: departmentId }, { extraDepartments: departmentId }],
+  $or: [{ department: departmentId }, { extraDepartments: departmentId }, { allDepartments: true }],
 });
+
+// EVERY active teacher / HOD of the college. The HOD's picker shows all of them (searchable by name, skill or department),
+// so a teacher of another department can be found and, with the HOD's permission step, be given a class here.
+export const collegeTeacherQuery = () => ({ role: { $in: [ROLES.TEACHER, ROLES.HOD] }, isActive: true });
+
+// Where a teacher is permitted to teach, as a short list for the screens: home department, other departments, or everywhere.
+export const permittedDepartments = (teacher) => {
+  const home = teacher.department ? { _id: teacher.department._id || teacher.department, code: teacher.department.code, name: teacher.department.name, home: true } : null;
+  const extra = (teacher.extraDepartments || []).filter((d) => d && d.code).map((d) => ({ _id: d._id, code: d.code, name: d.name, home: false }));
+  return { all: !!teacher.allDepartments, list: [home, ...extra].filter(Boolean) };
+};
 
 // Hours per week one class takes.
 export const weeklyClassesOf = (course) => course.weeklyClasses || course.creditHours || 0;

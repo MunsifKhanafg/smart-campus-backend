@@ -43,8 +43,10 @@ export const createUser = asyncHandler(async (req, res) => {
   if (role === ROLES.TEACHER) {
     teaching.subjects = cleanSubjects(req.body.subjects);
     teaching.extraDepartments = await cleanExtraDepartments(req.body.extraDepartments, deptId);
+    teaching.allDepartments = !!req.body.allDepartments;
   } else {
     delete req.body.maxWeeklyHours; // only teachers have a weekly teaching limit
+    delete req.body.allDepartments;
   }
   const user = await User.create({ ...req.body, ...teaching, department: deptId, mustChangePassword: true });
   logAudit(req, 'user.create', 'User', user._id, { role, department: deptId });
@@ -174,7 +176,7 @@ export const updateUser = asyncHandler(async (req, res) => {
     if (user.role !== ROLES.TEACHER) throw ApiError.forbidden('An HOD can correct the details of teachers of their own department only');
   }
 
-  const { name, email, phone, qualification, subjects, extraDepartments, maxWeeklyHours } = req.body;
+  const { name, email, phone, qualification, subjects, extraDepartments, maxWeeklyHours, allDepartments } = req.body;
   const changed = [];
   if (email !== undefined && email !== user.email) {
     if (await User.exists({ email, _id: { $ne: user._id } })) throw ApiError.conflict('Another account already uses this email');
@@ -187,6 +189,18 @@ export const updateUser = asyncHandler(async (req, res) => {
   // What the person teaches, where, and how many hours a week the administrator allows (empty = no limit).
   if (subjects !== undefined) { user.subjects = cleanSubjects(subjects); changed.push('subjects'); }
   if (maxWeeklyHours !== undefined && maxWeeklyHours !== user.maxWeeklyHours) { user.maxWeeklyHours = maxWeeklyHours; changed.push('weekly hours limit'); }
+  if (allDepartments !== undefined && allDepartments !== !!user.allDepartments) {
+    if (!allDepartments) {
+      // Switching "every department" off is refused while the teacher still has running classes outside their own permitted departments.
+      const permitted = [String(user.department), ...(user.extraDepartments || []).map(String)];
+      const running = await Course.find({ teacher: user._id, status: 'active' }).populate('semester', 'status').lean();
+      if (running.some((c) => c.semester && !['completed', 'archived'].includes(c.semester.status) && !permitted.includes(String(c.department)))) {
+        throw ApiError.conflict('This teacher still has classes in other departments. Give those classes to another teacher first');
+      }
+    }
+    user.allDepartments = allDepartments;
+    changed.push('teaches in every department');
+  }
   if (extraDepartments !== undefined) {
     const next = await cleanExtraDepartments(extraDepartments, user.department);
     const removed = (user.extraDepartments || []).filter((d) => !next.some((n) => String(n) === String(d)));

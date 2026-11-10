@@ -26,6 +26,7 @@ const contactSchema = z
 const teachingFields = {
   subjects: z.array(z.string().trim().min(1).max(80)).max(30).optional(),
   extraDepartments: z.array(objectId).max(20).optional(),
+  allDepartments: z.boolean().optional(), // common-subject teacher: any HOD may give them classes
   maxWeeklyHours: z.number().int().min(1).max(60).nullable().optional(),
 };
 

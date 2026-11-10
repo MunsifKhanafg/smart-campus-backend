@@ -26,6 +26,8 @@ const userSchema = new mongoose.Schema(
     // Other departments this teacher also teaches in (common subjects such as English or Islamiat are taught everywhere).
     // The HOD of such a department can give this teacher classes, without a second account.
     extraDepartments: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Department' }],
+    // Common-subject teacher (English, Mathematics, Islamiat...): may be given classes by the HOD of EVERY department.
+    allDepartments: { type: Boolean, default: false },
     // Weekly teaching hours the administrator allows for this teacher. Empty = no limit has been set.
     maxWeeklyHours: { type: Number, min: 1, max: 60, default: null },
     isActive: { type: Boolean, default: true },
