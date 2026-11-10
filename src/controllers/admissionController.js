@@ -16,6 +16,34 @@ import { smsToUser } from '../services/smsService.js';
 import { resolvePhone } from '../services/requirementService.js';
 import { ROLES, EXAM_STATUS, REVIEW_STATUS } from '../config/constants.js';
 
+// ---------- What the finance office may see ----------
+// The admission rules mix money with academic facts (attendance, assignments, earlier results). The finance officer works with the
+// money and the papers only, so every academic line is removed on the SERVER before the answer leaves it.
+const FINANCE_CHECKS = new Set(['fees', 'documents']);
+const feeSideChecks = (checks = []) => checks.filter((c) => FINANCE_CHECKS.has(c.key));
+const feeSideReason = (checks) => {
+  const failing = checks.filter((c) => !c.passed);
+  return failing.length ? `Waiting for: ${failing.map((c) => `${c.label} (${c.detail})`).join('; ')}` : 'Fee and document requirements are met';
+};
+const financeAdmission = (a) => {
+  if (!a) return a;
+  const plain = a.toObject ? a.toObject() : a;
+  const checks = feeSideChecks(plain.checks);
+  return { ...plain, checks, reason: feeSideReason(checks), remarks: '' }; // the HOD's remarks may talk about attendance or marks
+};
+const forRole = (user, row) => {
+  if (user.role !== ROLES.FINANCE_OFFICER) return row;
+  const out = { ...row };
+  if ('checks' in out) {
+    out.checks = feeSideChecks(out.checks);
+    out.allPassed = out.checks.every((c) => c.passed);
+    out.reason = feeSideReason(out.checks);
+  }
+  if ('admission' in out) out.admission = financeAdmission(out.admission);
+  if ('remarks' in out) out.remarks = '';
+  return out;
+};
+
 const loadPublishedExam = async (id) => {
   const exam = await loadExamWithPapers(id);
   if (!exam) throw ApiError.notFound('Examination not found');
@@ -93,7 +121,7 @@ const loadStudentFor = async (user, studentId) => {
 
 export const studentAdmissions = asyncHandler(async (req, res) => {
   const { profile } = await loadStudentFor(req.user, req.params.id);
-  sendSuccess(res, await admissionRows(req.params.id, profile));
+  sendSuccess(res, (await admissionRows(req.params.id, profile)).map((r) => forRole(req.user, r)));
 });
 
 export const requestAdmissionFor = asyncHandler(async (req, res) => {
@@ -104,7 +132,7 @@ export const requestAdmissionFor = asyncHandler(async (req, res) => {
   await notifyUsers([student._id], { title: 'Examination admission requested', message: `The office applied for your admission to ${exam.name}. You can follow it under Examinations.`, type: 'admission', link: '/exams' });
   const smsStatus = await smsToUser(student._id, `Admission request for ${exam.name} (Roll No ${profile.rollNumber}) was submitted by the university office. You will get an SMS when the HOD decides.`);
   logAudit(req, 'admission.request_for', 'ExaminationAdmission', admission._id, { student: String(student._id), by: req.user.name });
-  sendSuccess(res, { ...admission.toObject(), smsStatus }, 'Admission requested for the student. The HOD will review it', 201);
+  sendSuccess(res, { ...forRole(req.user, admission.toObject()), smsStatus }, 'Admission requested for the student. The HOD will review it', 201);
 });
 
 // ---------- HOD / head ----------
@@ -121,7 +149,7 @@ export const listAdmissions = asyncHandler(async (req, res) => {
   ]);
   const name = new Map(users.map((u) => [String(u._id), u.name]));
   const roll = new Map(profiles.map((p) => [String(p.user), p.rollNumber]));
-  sendSuccess(res, rows.map((r) => ({ ...r, studentName: name.get(String(r.student)), rollNumber: roll.get(String(r.student)) })));
+  sendSuccess(res, rows.map((r) => forRole(req.user, { ...r, studentName: name.get(String(r.student)), rollNumber: roll.get(String(r.student)) })));
 });
 
 export const reviewAdmission = asyncHandler(async (req, res) => {

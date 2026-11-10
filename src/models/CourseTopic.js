@@ -11,11 +11,10 @@ const courseTopicSchema = new mongoose.Schema(
     title: { type: String, required: true, trim: true, maxlength: 200 },
     description: { type: String, trim: true, maxlength: 5000, default: '' },
     scheduledDate: { type: Date, required: true, index: true },
-    // Position of the topic in the course (1, 2, 3 ...). Only a tie-breaker for topics on the same day: the number shown is
-    // the topic's place in the list sorted by date, so it is always 1, 2, 3 ... without gaps after an add, delete or move.
-    order: { type: Number, default: 0 },
-    // true = the date was chosen by the smart scheduler from the academic calendar, so it is moved automatically when a
-    // holiday, an exam, a vacation or the semester dates change. A date typed by the teacher (false) is never moved.
+    // Position of the topic in the course (1, 2, 3 ...). Set by the scheduler; see services/teachingCalendarService.js.
+    sequence: { type: Number, default: 0 },
+    // true = the date was chosen by the smart scheduler from the academic calendar, so it moves automatically when a holiday,
+    // an examination, a vacation or the semester dates change. A date typed by the teacher (false) is "pinned" and never moved.
     autoScheduled: { type: Boolean, default: false },
     // Optional access policy: after this date students lose access (default null = stays available for revision).
     availableUntil: { type: Date, default: null },

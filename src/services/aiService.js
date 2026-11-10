@@ -1,5 +1,6 @@
 import { ApiError } from '../utils/apiHelpers.js';
 import { retrieveChunks } from './ragService.js';
+import { fenceData } from './chatModes.js';
 
 // The API key lives ONLY in server/.env (AI_API_KEY). The React app never sees it.
 export const llmConfigured = () => !!process.env.AI_API_KEY;
@@ -44,7 +45,8 @@ export const answerFromMaterials = async ({ question, courseIds, history = [], i
       sources,
     };
   }
-  const materials = chunks.map((c, i) => `<excerpt id="${i + 1}" topic="${c.topic?.title || ''}" file="${c.fileName}">\n${c.text}\n</excerpt>`).join('\n');
+  // Teacher-uploaded text is untrusted: it must not be able to close the <materials> block and pose as an instruction.
+  const materials = chunks.map((c, i) => `<excerpt id="${i + 1}" topic="${fenceData(c.topic?.title || '')}" file="${fenceData(c.fileName)}">\n${fenceData(c.text)}\n</excerpt>`).join('\n');
   const messages = [
     ...history.slice(-6).map((m) => ({ role: m.role, content: m.content })),
     { role: 'user', content: `<materials>\n${materials}\n</materials>\n\nStudent question: ${question}` },

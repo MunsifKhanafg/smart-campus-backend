@@ -25,10 +25,13 @@ const universitySettingsSchema = new mongoose.Schema(
 
     currentAcademicYear: { type: String, default: '2025-2026', trim: true },
 
-    // Weekdays on which nothing is taught anywhere in the university. The course-content scheduler never uses them.
-    weeklyOffDays: {
-      type: [{ type: String, enum: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] }],
-      default: ['sunday'],
+    // Days of the week on which nothing is taught anywhere in the university (Sunday by default). Course contents are never
+    // placed on them (services/teachingCalendarService.js).
+    calendarRules: {
+      weeklyHolidays: {
+        type: [{ type: String, enum: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] }],
+        default: ['sunday'],
+      },
     },
 
     gradingRules: {
@@ -114,18 +117,20 @@ universitySettingsSchema.statics.getSettings = async function () {
   return doc;
 };
 
-// A different weekly holiday changes which days can be taught: every dated course content is calculated again.
+// A different weekly holiday changes which days can be taught: the dated course contents are calculated again.
 universitySettingsSchema.pre('save', function (next) {
-  this.$locals.weeklyOffChanged = !this.isNew && this.isModified('weeklyOffDays');
+  this.$locals.weeklyHolidaysChanged = !this.isNew && this.isModified('calendarRules.weeklyHolidays');
   next();
 });
 universitySettingsSchema.post('save', async function (doc) {
-  if (!doc.$locals?.weeklyOffChanged) return;
+  if (!doc.$locals?.weeklyHolidaysChanged) return;
   try {
-    const { syncScope } = await import('../services/scheduleSync.js');
-    await syncScope({});
+    const { recalcSemester } = await import('../services/teachingCalendarService.js');
+    const { default: CourseTopic } = await import('./CourseTopic.js');
+    const semesters = await CourseTopic.distinct('semester', { autoScheduled: true, scheduledDate: { $gte: new Date() } });
+    for (const id of semesters) await recalcSemester(id);
   } catch (err) {
-    console.error('Weekly holiday schedule sync failed:', err.message);
+    console.error('Weekly holiday schedule recalculation failed:', err.message);
   }
 });
 

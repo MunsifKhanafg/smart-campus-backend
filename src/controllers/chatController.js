@@ -2,7 +2,8 @@ import AIConversation from '../models/AIConversation.js';
 import { ApiError, asyncHandler, sendSuccess } from '../utils/apiHelpers.js';
 import { getCourseFor } from '../services/accessService.js';
 import { answerFromMaterials, callLLM, llmConfigured } from '../services/aiService.js';
-import { modesFor, findMode, buildSystemPrompt, toModelMessages } from '../services/chatModes.js';
+import { modesFor, findMode, buildSystemPrompt, toModelMessages, fenceData } from '../services/chatModes.js';
+import { logAudit } from '../utils/audit.js';
 import { loadCampusData, campusText, campusFallback } from '../services/campusContext.js';
 import { loadPeople, peopleText, peopleFallback } from '../services/peopleContext.js';
 import { ROLES } from '../config/constants.js';
@@ -54,11 +55,16 @@ export const chat = asyncHandler(async (req, res) => {
     // Only the principal and HODs can reach this option (findMode above). An HOD is limited to their own department.
     const previous = [...(convo?.messages || [])].reverse().find((m) => m.role === 'user')?.content || '';
     const data = await loadPeople(req.user, `${previous} ${message}`); // the previous question helps with "and their phone numbers?"
+    // Personal details are being looked up, so every such question is written to the audit log (who asked, how much was returned).
+    logAudit(req, 'ai.people_query', 'AIConversation', convo?._id || null, {
+      role: req.user.role, department: req.user.role === ROLES.HOD ? String(req.user.department) : 'all', question: message.slice(0, 200),
+      students: data.students.length + data.matches.students.length, teachers: data.teachers.length + data.matches.teachers.length,
+    });
     if (!llmConfigured()) {
       answer = peopleFallback(data);
     } else {
       answer = await callLLM({
-        system: `${buildSystemPrompt(req.user.role, 'people')}\n\n${PEOPLE_RULES}\n\n<people_data>\n${peopleText(data)}\n</people_data>`,
+        system: `${buildSystemPrompt(req.user.role, 'people')}\n\n${PEOPLE_RULES}\n\n<people_data>\n${fenceData(peopleText(data))}\n</people_data>`,
         messages: [...toModelMessages(convo?.messages || []), { role: 'user', content: message }],
         maxTokens: 2500,
       });
@@ -70,7 +76,7 @@ export const chat = asyncHandler(async (req, res) => {
       answer = campusFallback(data, message);
     } else {
       answer = await callLLM({
-        system: `${buildSystemPrompt(req.user.role, 'campus')}\n\n${CAMPUS_RULES}\n\n<campus_data>\n${campusText(data)}\n</campus_data>`,
+        system: `${buildSystemPrompt(req.user.role, 'campus')}\n\n${CAMPUS_RULES}\n\n<campus_data>\n${fenceData(campusText(data))}\n</campus_data>`,
         messages: [...toModelMessages(convo?.messages || []), { role: 'user', content: message }],
         maxTokens: 1800,
       });

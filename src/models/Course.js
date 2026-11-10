@@ -9,13 +9,10 @@ const courseSchema = new mongoose.Schema(
     department: { type: mongoose.Schema.Types.ObjectId, ref: 'Department', required: true, index: true },
     semester: { type: mongoose.Schema.Types.ObjectId, ref: 'Semester', required: true, index: true },
     creditHours: { type: Number, required: true, min: 1, max: 6 },
-    // Weekly teaching hours when they differ from the credit hours (for example a 3 credit course taught 5 hours a week).
-    // null = use the credit hours. Only the weekly timetable uses it; credit hours stay what the curriculum says.
-    weeklyHours: { type: Number, min: 1, max: 30, default: null },
-    // A subject taught in several departments (English, Mathematics, Islamiat, Pakistan Studies ...). Teachers who are
-    // qualified for it may be assigned to it from any department.
-    isCommon: { type: Boolean, default: false },
-    // The weekdays on which the teacher really teaches this class. Empty = taken from the timetable, or Monday to Saturday.
+    // How many hours per week the class is taught when that differs from the credit hours (a 3 credit-hour subject can be
+    // taught 4, 6 or 8 times a week). Empty = the credit hours. Used by the timetable and by the teacher's weekly load.
+    weeklyClasses: { type: Number, min: 1, max: 40, default: null },
+    // The weekdays on which the teacher really teaches this class. Empty = taken from the timetable, else every working day.
     teachingDays: { type: [{ type: String, enum: DAYS }], default: [] },
     description: { type: String, trim: true, maxlength: 2000, default: '' },
     outline: { type: String, trim: true, maxlength: 10000, default: '' },
