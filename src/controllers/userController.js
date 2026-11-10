@@ -29,11 +29,16 @@ export const createUser = asyncHandler(async (req, res) => {
 
   let deptId = department;
   if (!isHead) deptId = req.user.department; // HOD is forced into their own department
+  // A common-subject teacher (English, Mathematics, Islamiat...) belongs to the whole college. Only the principal can add one,
+  // and a home department is optional for them (there is no "Mathematics department" to put them in).
+  const collegeWide = role === ROLES.TEACHER && isHead && !!req.body.allDepartments;
   if (role !== ROLES.FINANCE_OFFICER) {
-    if (!deptId) throw ApiError.badRequest('Department is required for this role');
-    assertDepartmentAccess(req.user, deptId);
-    const dept = await Department.findById(deptId);
-    if (!dept || dept.status !== DEPARTMENT_STATUS.ACTIVE) throw ApiError.badRequest('Department not found or not active');
+    if (!deptId && !collegeWide) throw ApiError.badRequest('Choose a department, or tick "Teaches in every department" for a common-subject teacher');
+    if (deptId) {
+      assertDepartmentAccess(req.user, deptId);
+      const dept = await Department.findById(deptId);
+      if (!dept || dept.status !== DEPARTMENT_STATUS.ACTIVE) throw ApiError.badRequest('Department not found or not active');
+    }
   } else {
     deptId = undefined;
   }
@@ -43,7 +48,7 @@ export const createUser = asyncHandler(async (req, res) => {
   if (role === ROLES.TEACHER) {
     teaching.subjects = cleanSubjects(req.body.subjects);
     teaching.extraDepartments = await cleanExtraDepartments(req.body.extraDepartments, deptId);
-    teaching.allDepartments = !!req.body.allDepartments;
+    teaching.allDepartments = collegeWide;
   } else {
     delete req.body.maxWeeklyHours; // only teachers have a weekly teaching limit
     delete req.body.allDepartments;
@@ -60,7 +65,7 @@ export const listUsers = asyncHandler(async (req, res) => {
   const dept = req.user.role === ROLES.UNIVERSITY_HEAD ? department : req.user.department;
   if (dept) {
     // includeShared: also teachers of OTHER departments who are allowed to teach here (common subjects such as English)
-    and.push(includeShared === 'true' ? { $or: [{ department: dept }, { extraDepartments: dept }] } : { department: dept });
+    and.push(includeShared === 'true' ? { $or: [{ department: dept }, { extraDepartments: dept }, { allDepartments: true }] } : { department: dept });
   }
   if (role) and.push({ role });
   if (search) {

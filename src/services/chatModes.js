@@ -27,11 +27,17 @@ const ALL = [
     extra: 'Draft questions for the teacher with an answer key and a marking scheme. The teacher reviews and finalises them.' },
   { id: 'rubric', icon: '📊', label: 'Marking rubric', hint: 'Criteria and marks for an assignment', placeholder: 'Describe the assignment and total marks...', who: ['staff'],
     extra: 'Create a clear marking rubric as a table: criteria, what each level looks like, and the marks.' },
+  { id: 'people', icon: '👥', label: 'Students & teachers', hint: 'Names and details of students, teachers and departments', placeholder: 'e.g. List all teachers with their subjects. Show students of semester 3. Details of student CS-S1-03', who: [], leader: true,
+    extra: 'Answer about the students, teachers and departments in the people data supplied. Show lists as tables with the details asked for. Never invent people and never go beyond the data supplied.' },
+  { id: 'campus', icon: '🏫', label: 'My courses & teachers', hint: 'Your subjects, teachers, timetable and course contents', placeholder: 'e.g. Who teaches my English class? What is in the course contents of Pakistan Studies?', who: ['student', 'staff'],
+    extra: 'Answer about the user\'s own subjects, teachers, credit hours, weekly classes and course contents of this university, from the campus data supplied. Number course content items as given. You may explain an item or plan study time from it.' },
   { id: 'course', icon: '📖', label: 'Course materials', hint: 'Answers only from one course\'s uploaded notes', placeholder: 'Ask about this course\'s materials...', who: ['student', 'staff'], extra: '' },
 ];
 
 export const groupOf = (role) => ROLE_GROUPS[role] || 'student';
-export const modesFor = (role) => ALL.filter((m) => m.who.includes(groupOf(role))).map(({ who, extra, ...m }) => m);
+// `leader` options (students & teachers lists) are only for the principal and the HODs.
+const isLeader = (role) => role === 'hod' || role === 'university_head';
+export const modesFor = (role) => ALL.filter((m) => m.who.includes(groupOf(role)) || (m.leader && isLeader(role))).map(({ who, extra, leader, ...m }) => m);
 export const findMode = (role, id) => modesFor(role).find((m) => m.id === id) || null;
 
 const BASE = `You are the AI study and teaching assistant of a university, a helpful conversational assistant like ChatGPT for academic and educational questions.

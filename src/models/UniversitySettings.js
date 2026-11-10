@@ -25,6 +25,12 @@ const universitySettingsSchema = new mongoose.Schema(
 
     currentAcademicYear: { type: String, default: '2025-2026', trim: true },
 
+    // Weekdays on which nothing is taught anywhere in the university. The course-content scheduler never uses them.
+    weeklyOffDays: {
+      type: [{ type: String, enum: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] }],
+      default: ['sunday'],
+    },
+
     gradingRules: {
       type: [gradeRuleSchema],
       default: [
@@ -107,5 +113,20 @@ universitySettingsSchema.statics.getSettings = async function () {
   if (!doc) doc = await this.create({ key: 'global' });
   return doc;
 };
+
+// A different weekly holiday changes which days can be taught: every dated course content is calculated again.
+universitySettingsSchema.pre('save', function (next) {
+  this.$locals.weeklyOffChanged = !this.isNew && this.isModified('weeklyOffDays');
+  next();
+});
+universitySettingsSchema.post('save', async function (doc) {
+  if (!doc.$locals?.weeklyOffChanged) return;
+  try {
+    const { syncScope } = await import('../services/scheduleSync.js');
+    await syncScope({});
+  } catch (err) {
+    console.error('Weekly holiday schedule sync failed:', err.message);
+  }
+});
 
 export default mongoose.model('UniversitySettings', universitySettingsSchema);

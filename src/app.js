@@ -14,6 +14,7 @@ import { feeRouter, paymentRouter, documentRouter, admissionRouter } from './rou
 import { complaintRouter, announcementRouter, publicContactRouter, reportRouter, aiRouter } from './routes/phase7.js';
 import { publicAdmissionRouter, applicationRouter } from './routes/applications.js';
 import { stripeWebhook } from './controllers/paymentController.js';
+import { teachingCalendarRouter } from './routes/teachingCalendar.js';
 import { notFound, errorHandler } from './middleware/errorHandler.js';
 import { apiLimiter } from './middleware/rateLimit.js';
 import { BRANDING_DIR } from './middleware/upload.js';
@@ -89,6 +90,7 @@ app.use('/api/notifications', notificationRouter);
 
 // Phase 4
 app.use('/api/topics', topicRouter);
+app.use('/api/teaching-calendar', teachingCalendarRouter); // teaching days + automatic content scheduling
 app.use('/api/assignments', assignmentRouter);
 app.use('/api/attendance', attendanceRouter);
 app.use('/api/quizzes', quizRouter);

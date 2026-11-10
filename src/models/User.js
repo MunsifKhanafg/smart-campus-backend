@@ -39,7 +39,8 @@ const userSchema = new mongoose.Schema(
 );
 
 userSchema.pre('validate', function (next) {
-  const needsDept = [ROLES.HOD, ROLES.TEACHER, ROLES.STUDENT].includes(this.role);
+  // A common-subject teacher (English, Mathematics, Islamiat...) teaches in every department, so they need no home department.
+  const needsDept = [ROLES.HOD, ROLES.STUDENT].includes(this.role) || (this.role === ROLES.TEACHER && !this.allDepartments);
   if (needsDept && !this.department) {
     return next(new Error(`Department is required for role "${this.role}"`));
   }

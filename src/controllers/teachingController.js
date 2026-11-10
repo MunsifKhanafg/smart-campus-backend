@@ -15,7 +15,7 @@ import { subjectsOf, createMissingClasses } from '../services/classService.js';
 import { normalizeTitle, titleScore } from '../services/outlineService.js';
 import TimetableSlot from '../models/TimetableSlot.js';
 import { findBlockers } from '../utils/blockers.js';
-import { eligibleTeacherQuery, teachesIn, assertWithinWeeklyLimit } from '../services/teacherService.js';
+import { eligibleTeacherQuery, collegeTeacherQuery, permittedDepartments, teachesIn, assertWithinWeeklyLimit } from '../services/teacherService.js';
 import { courseBlockerChecks, courseDataSummary, purgeCourse, purgeCourseDeep } from '../services/courseRemoval.js';
 import { ROLES, COURSE_STATUS, STUDENT_STATUS, CLOSED_SEMESTER_STATES } from '../config/constants.js';
 
@@ -45,8 +45,10 @@ export const board = asyncHandler(async (req, res) => {
   const codes = subjects.map((s) => s.code);
   const [courses, teachers] = await Promise.all([
     Course.find({ semester: semester._id }).populate('teacher', 'name email').lean(),
-    // The department's own teachers AND teachers of other departments who are allowed to teach here (common subjects).
-    User.find(eligibleTeacherQuery(deptId)).select('name email phone qualification role subjects maxWeeklyHours department').populate('department', 'name code').sort({ name: 1 }).lean(),
+    // EVERY active teacher of the college, so the HOD can search all of them by name, skill or department. Only the ones permitted to
+    // teach in this department (their own, extra departments, or common-subject "every department" teachers) can be chosen; the rest
+    // are shown greyed out (eligible = false) and the server refuses them too.
+    User.find(collegeTeacherQuery()).select('name email phone qualification role subjects maxWeeklyHours department extraDepartments allDepartments').populate('department', 'name code').populate('extraDepartments', 'name code').sort({ name: 1 }).lean(),
   ]);
 
   const load = await Course.find({ teacher: { $in: teachers.map((t) => t._id) }, status: COURSE_STATUS.ACTIVE })
@@ -68,10 +70,14 @@ export const board = asyncHandler(async (req, res) => {
     otherClasses: courses.filter((c) => !codes.includes(c.code)).length,
     teachers: teachers.map((t) => {
       const mine = open.filter((c) => String(c.teacher) === String(t._id));
+      const weekly = mine.reduce((n, c) => n + (c.weeklyClasses || c.creditHours || 0), 0);
       return {
         ...t,
         creditHours: mine.reduce((n, c) => n + (c.creditHours || 0), 0),
-        weeklyHours: mine.reduce((n, c) => n + (c.weeklyClasses || c.creditHours || 0), 0), // classes per week, what the weekly limit is measured against
+        weeklyHours: weekly, // classes per week, what the weekly limit is measured against
+        freeHours: t.maxWeeklyHours ? Math.max(0, t.maxWeeklyHours - weekly) : null, // null = no limit set
+        eligible: teachesIn(t, deptId), // may this teacher be given a class of THIS department?
+        permitted: permittedDepartments(t), // where they are permitted to teach: { all, list: [{ code, name, home }] }
         home: String(t.department?._id) === String(deptId), // false = a teacher of another department who also teaches here
         assignments: mine.map((c) => ({ _id: c._id, code: c.code, title: c.title, section: c.section, creditHours: c.creditHours, semester: c.semester?.name })),
       };

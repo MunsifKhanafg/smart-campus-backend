@@ -8,6 +8,8 @@ import { assertDepartmentAccess } from '../middleware/auth.js';
 import { logAudit } from '../utils/audit.js';
 import { notifyUsers } from '../utils/notify.js';
 import { autoEnrollSemester } from '../services/enrollmentService.js';
+import { computeEndDate, DEFAULT_SEMESTER_WEEKS } from '../services/semesterDates.js';
+import { recalcSemester } from '../services/teachingCalendarService.js';
 import Attendance from '../models/Attendance.js';
 import Examination from '../models/Examination.js';
 import FeeNotice from '../models/FeeNotice.js';
@@ -64,7 +66,17 @@ export const createSemester = asyncHandler(async (req, res) => {
   const dept = await Department.findById(req.user.department);
   if (!dept || dept.status !== DEPARTMENT_STATUS.ACTIVE) throw ApiError.badRequest('Your department is not active');
 
-  const semester = await Semester.create({ ...req.body, department: dept._id, createdBy: req.user._id });
+  // The end date is calculated from the start date and the duration in weeks, unless the HOD typed one by hand.
+  const { endDate, durationWeeks, ...rest } = req.body;
+  const weeks = durationWeeks || DEFAULT_SEMESTER_WEEKS;
+  const semester = await Semester.create({
+    ...rest,
+    durationWeeks: weeks,
+    endDate: endDate || computeEndDate(rest.startDate, weeks),
+    endDateManual: !!endDate,
+    department: dept._id,
+    createdBy: req.user._id,
+  });
   logAudit(req, 'semester.create', 'Semester', semester._id, { name: semester.name });
   sendSuccess(res, await findSemester(semester._id), 'Semester created', 201);
 });
@@ -74,10 +86,37 @@ export const updateSemester = asyncHandler(async (req, res) => {
   assertDepartmentAccess(req.user, semester.department._id);
   if (semester.status === SEMESTER_STATUS.ARCHIVED) throw ApiError.badRequest('Archived semesters cannot be edited');
 
-  semester.set(req.body);
+  // Start date or duration changed -> the end date is calculated again, unless the same request sets an end date by hand.
+  // An end date typed by hand is kept (endDateManual) until the start date or the duration changes again.
+  const { startDate, endDate, durationWeeks, ...rest } = req.body;
+  semester.set(rest);
+  const before = { start: +semester.startDate, end: +semester.endDate };
+  if (durationWeeks !== undefined) semester.durationWeeks = durationWeeks;
+  if (startDate) semester.startDate = startDate;
+  if (endDate) {
+    semester.endDate = endDate;
+    semester.endDateManual = true;
+  } else if (startDate || durationWeeks !== undefined) {
+    semester.endDate = computeEndDate(semester.startDate, semester.durationWeeks);
+    semester.endDateManual = false;
+  }
   await semester.save(); // model re-checks end date > start date on the merged values
-  logAudit(req, 'semester.update', 'Semester', semester._id, { fields: Object.keys(req.body) });
-  sendSuccess(res, semester, 'Semester updated');
+
+  // Course content follows the semester: topics placed by the scheduler move to real teaching days inside the new dates.
+  const datesChanged = before.start !== +semester.startDate || before.end !== +semester.endDate;
+  const moved = datesChanged ? await recalcSemester(semester._id) : 0;
+  const outside = datesChanged
+    ? await CourseTopic.countDocuments({
+        semester: semester._id,
+        autoScheduled: false,
+        $or: [{ scheduledDate: { $lt: semester.startDate } }, { scheduledDate: { $gt: new Date(+semester.endDate + 86399999) } }],
+      })
+    : 0;
+  logAudit(req, 'semester.update', 'Semester', semester._id, { fields: Object.keys(req.body), endDate: semester.endDate, topicsMoved: moved });
+  const notes = [];
+  if (moved) notes.push(`${moved} topic date(s) were recalculated`);
+  if (outside) notes.push(`${outside} topic(s) with a date you set by hand are outside the new semester dates. Please check them`);
+  sendSuccess(res, semester, `Semester updated. It ends on ${semester.endDate.toISOString().slice(0, 10)}${notes.length ? `. ${notes.join('. ')}` : ''}`);
 });
 
 export const setSemesterStatus = asyncHandler(async (req, res) => {

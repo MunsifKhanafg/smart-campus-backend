@@ -1,0 +1,279 @@
+import AcademicCalendar from '../models/AcademicCalendar.js';
+import Examination from '../models/Examination.js';
+import Semester from '../models/Semester.js';
+import Course from '../models/Course.js';
+import CourseTopic from '../models/CourseTopic.js';
+import TimetableSlot from '../models/TimetableSlot.js';
+import UniversitySettings from '../models/UniversitySettings.js';
+import { ApiError } from '../utils/apiHelpers.js';
+import { notifyUsers } from '../utils/notify.js';
+import { syncTopicRelease } from './ragService.js';
+import { DAYS, COURSE_STATUS } from '../config/constants.js';
+
+// ==========================================================================================================
+// The ACADEMIC CALENDAR decides which days a class can really be taught. Course content is spread over those days only,
+// never over all calendar days.
+//
+//   a day is a TEACHING DAY of a class when
+//     - it lies inside the semester (and inside the course's own start / end dates, if set), and
+//     - its weekday is one the teacher really teaches (the teacher's own choice, else the timetable, else every working day), and
+//     - it is NOT a weekly holiday (Sunday by default, configurable in Settings), a public holiday, a midterm or final
+//       examination period (calendar events AND examination sessions), a summer or winter vacation, or a semester break.
+//
+// Topics placed by the scheduler (autoScheduled) are recalculated automatically whenever the calendar, an examination or the
+// semester dates change. Topics the teacher dates by hand are "pinned" and never moved. Days in the past are never touched.
+// ==========================================================================================================
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const WEEKDAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+export const dayMs = (d) => {
+  const x = new Date(d);
+  return Date.UTC(x.getUTCFullYear(), x.getUTCMonth(), x.getUTCDate());
+};
+export const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+const weekdayOf = (ms) => WEEKDAY_NAMES[new Date(ms).getUTCDay()];
+const todayMs = () => dayMs(new Date());
+const idOf = (v) => v?._id || v;
+
+// Calendar events that stop teaching.
+export const NON_TEACHING = {
+  holiday: 'Holiday',
+  midterm_exam: 'Midterm examinations',
+  final_exam: 'Final examinations',
+  summer_vacation: 'Summer vacation',
+  winter_vacation: 'Winter vacation',
+};
+
+// Every non-teaching day of a semester -> the reason. (day in ms -> text)
+export const blockedDays = async (semester, settings) => {
+  const from = dayMs(semester.startDate);
+  const to = dayMs(semester.endDate);
+  const blocked = new Map();
+  const mark = (s, e, reason) => {
+    for (let t = Math.max(dayMs(s), from); t <= Math.min(dayMs(e), to); t += DAY_MS) if (!blocked.has(t)) blocked.set(t, reason);
+  };
+
+  const [events, exams] = await Promise.all([
+    AcademicCalendar.find({
+      type: { $in: Object.keys(NON_TEACHING) },
+      startDate: { $lte: semester.endDate },
+      endDate: { $gte: semester.startDate },
+      $and: [
+        { $or: [{ department: null }, { department: idOf(semester.department) }] },
+        { $or: [{ semester: null }, { semester: semester._id }] },
+      ],
+    }).lean(),
+    Examination.find({ semester: semester._id }).select('name startDate endDate').lean(),
+  ]);
+  events.forEach((e) => mark(e.startDate, e.endDate, e.title || NON_TEACHING[e.type]));
+  exams.forEach((x) => mark(x.startDate, x.endDate, `Examination: ${x.name}`));
+
+  const weekly = new Set((settings.calendarRules?.weeklyHolidays || ['sunday']).map((s) => s.toLowerCase()));
+  for (let t = from; t <= to; t += DAY_MS) if (weekly.has(weekdayOf(t)) && !blocked.has(t)) blocked.set(t, 'Weekly holiday');
+  return blocked;
+};
+
+// The weekdays this class is taught on, and where that information comes from.
+export const courseWeekdays = async (course, settings) => {
+  if (course.teachingDays?.length) return { days: DAYS.filter((d) => course.teachingDays.includes(d)), source: 'teacher' };
+  const days = await TimetableSlot.find({ course: course._id }).distinct('day');
+  if (days.length) return { days: DAYS.filter((d) => days.includes(d)), source: 'timetable' };
+  const weekly = new Set((settings.calendarRules?.weeklyHolidays || ['sunday']).map((s) => s.toLowerCase()));
+  return { days: DAYS.filter((d) => !weekly.has(d)), source: 'default' };
+};
+
+// All the teaching days of a class. `from` limits the list to today and later (used when scheduling or recalculating).
+export const teachingCalendar = async (course, { from } = {}) => {
+  const settings = await UniversitySettings.getSettings();
+  const semester = course.semester?.startDate ? course.semester : await Semester.findById(idOf(course.semester));
+  if (!semester) throw ApiError.notFound('The semester of this class was not found');
+
+  const blocked = await blockedDays(semester, settings);
+  const { days, source } = await courseWeekdays(course, settings);
+  const wanted = new Set(days);
+  const semFrom = dayMs(semester.startDate);
+  const semTo = dayMs(semester.endDate);
+  // A class never runs outside its semester, even if the course dates were typed wider.
+  const rangeFrom = Math.max(semFrom, course.startDate ? dayMs(course.startDate) : semFrom);
+  const rangeTo = Math.min(semTo, course.endDate ? dayMs(course.endDate) : semTo);
+  const startAt = from ? Math.max(rangeFrom, dayMs(from)) : rangeFrom;
+
+  const dates = [];
+  const skipped = [];
+  for (let t = startAt; t <= rangeTo; t += DAY_MS) {
+    if (!wanted.has(weekdayOf(t))) continue;
+    if (blocked.has(t)) skipped.push({ ms: t, reason: blocked.get(t) });
+    else dates.push(t);
+  }
+  return { semester, weekdays: days, source, range: { from: rangeFrom, to: rangeTo }, dates, skipped, blocked };
+};
+
+// Consecutive skipped days with the same reason become one period ("Winter vacation: 22 Dec to 5 Jan").
+const groupSkipped = (skipped) => {
+  const out = [];
+  for (const s of skipped) {
+    const last = out[out.length - 1];
+    if (last && last.reason === s.reason && s.ms - last.toMs <= 7 * DAY_MS) { last.toMs = s.ms; last.days += 1; }
+    else out.push({ reason: s.reason, fromMs: s.ms, toMs: s.ms, days: 1 });
+  }
+  return out.map((p) => ({ reason: p.reason, from: isoDay(p.fromMs), to: isoDay(p.toMs), days: p.days }));
+};
+
+// What the teacher sees on the Topics tab.
+export const calendarSummary = async (course) => {
+  const all = await teachingCalendar(course);
+  const left = await teachingCalendar(course, { from: new Date(todayMs()) });
+  return {
+    semester: { name: all.semester.name, startDate: isoDay(dayMs(all.semester.startDate)), endDate: isoDay(dayMs(all.semester.endDate)) },
+    range: { from: isoDay(all.range.from), to: isoDay(all.range.to) },
+    weekdays: all.weekdays,
+    source: all.source, // teacher | timetable | default
+    teachingDaysTotal: all.dates.length,
+    teachingDaysLeft: left.dates.length,
+    nextTeachingDays: left.dates.slice(0, 5).map(isoDay),
+    skippedPeriods: groupSkipped(left.skipped),
+  };
+};
+
+// Spreads `count` topics evenly over the teaching days. count <= days: every topic gets its own day, evenly spaced.
+// count > days: several topics share a day. Returns the day (ms) of every topic, in order.
+export const distribute = (count, dates) => {
+  if (!count || !dates.length) return [];
+  return Array.from({ length: count }, (_, i) => dates[Math.min(dates.length - 1, Math.floor((i * dates.length) / count))]);
+};
+
+// A manual date must be a real teaching day: inside the semester and not a holiday, examination, vacation or weekly holiday.
+export const assertTeachingDate = async (course, date) => {
+  const cal = await teachingCalendar(course);
+  const t = dayMs(date);
+  if (t < cal.range.from || t > cal.range.to) {
+    throw ApiError.badRequest(`${isoDay(t)} is outside the dates of this class (${isoDay(cal.range.from)} to ${isoDay(cal.range.to)})`);
+  }
+  if (cal.blocked.has(t)) throw ApiError.badRequest(`${isoDay(t)} is not a teaching day: ${cal.blocked.get(t)}. Please choose another date`);
+};
+
+// Saves the new dates of a list of topics (new or existing). Returns how many existing topics changed their day.
+const place = async (topics, days) => {
+  const slots = distribute(topics.length, days);
+  let moved = 0;
+  for (let i = 0; i < topics.length; i += 1) {
+    const t = topics[i];
+    const wasNew = t.isNew;
+    const changed = wasNew || dayMs(t.scheduledDate) !== slots[i];
+    t.scheduledDate = new Date(slots[i]);
+    t.autoScheduled = true;
+    t.sequence = t.sequence || i + 1;
+    if (!changed) continue;
+    await t.save();
+    if (!wasNew) {
+      moved += 1;
+      await syncTopicRelease(t).catch(() => {}); // the AI assistant follows the release date
+    }
+  }
+  return moved;
+};
+
+const upcomingAuto = (courseId) =>
+  CourseTopic.find({ course: courseId, autoScheduled: true, scheduledDate: { $gte: new Date(todayMs()) } }).sort({ sequence: 1, scheduledDate: 1 });
+
+// The teacher presses "schedule": the new titles (if any) and every not-yet-taught scheduler topic of the course are spread
+// evenly over the teaching days that are left.
+export const scheduleCourseTopics = async (course, { titles = [], userId = null } = {}) => {
+  const cal = await teachingCalendar(course, { from: new Date(todayMs()) });
+  if (!cal.dates.length) {
+    throw ApiError.badRequest(
+      `There are no teaching days left for this class between today and ${isoDay(cal.range.to)}. ` +
+        'Check the teaching days of the class, the semester dates and the holidays or examinations in the academic calendar'
+    );
+  }
+  const existing = await upcomingAuto(course._id);
+  if (!existing.length && !titles.length) throw ApiError.badRequest('There are no topics to schedule');
+
+  const last = await CourseTopic.findOne({ course: course._id }).sort({ sequence: -1 }).select('sequence').lean();
+  let seq = last?.sequence || 0;
+  const fresh = titles.map(
+    (title) =>
+      new CourseTopic({
+        course: course._id,
+        department: idOf(course.department),
+        semester: cal.semester._id,
+        title,
+        description: '',
+        scheduledDate: new Date(cal.dates[0]),
+        autoScheduled: true,
+        sequence: (seq += 1),
+        createdBy: userId,
+      })
+  );
+  const all = [...existing, ...fresh];
+  const moved = await place(all, cal.dates);
+  const dates = all.map((t) => dayMs(t.scheduledDate));
+  return {
+    scheduled: all.length,
+    created: fresh.length,
+    moved,
+    teachingDays: cal.dates.length,
+    first: isoDay(Math.min(...dates)),
+    last: isoDay(Math.max(...dates)),
+    skippedPeriods: groupSkipped(cal.skipped),
+  };
+};
+
+// Recalculates ONE course after the calendar, an exam or the semester dates changed. The teacher is told what moved.
+export const recalcCourse = async (courseId) => {
+  const course = await Course.findById(courseId).populate('semester');
+  if (!course || course.status !== COURSE_STATUS.ACTIVE) return 0;
+  const topics = await upcomingAuto(course._id);
+  if (!topics.length) return 0;
+
+  const cal = await teachingCalendar(course, { from: new Date(todayMs()) });
+  if (!cal.dates.length) {
+    if (course.teacher) {
+      await notifyUsers([course.teacher], {
+        title: `No teaching days left: ${course.code}`,
+        message: 'After the latest calendar change there is no teaching day left for the remaining topics. Please check the semester dates and the holidays.',
+        type: 'schedule',
+        link: `/courses/${course._id}`,
+      });
+    }
+    return 0;
+  }
+  const moved = await place(topics, cal.dates);
+  if (moved > 0 && course.teacher) {
+    await notifyUsers([course.teacher], {
+      title: `Course schedule updated: ${course.code}`,
+      message: `${moved} topic date(s) were recalculated because the academic calendar, an examination or the semester dates changed. Topics only fall on real teaching days.`,
+      type: 'schedule',
+      link: `/courses/${course._id}`,
+    });
+  }
+  return moved;
+};
+
+export const recalcSemester = async (semesterId) => {
+  const courseIds = await CourseTopic.distinct('course', { semester: semesterId, autoScheduled: true, scheduledDate: { $gte: new Date(todayMs()) } });
+  let moved = 0;
+  for (const id of courseIds) moved += await recalcCourse(id);
+  return moved;
+};
+
+// Several calendar changes in a row (for example a whole list of holidays) are handled once.
+const timers = new Map();
+const queue = (semesterId) => {
+  const key = String(semesterId);
+  clearTimeout(timers.get(key));
+  timers.set(key, setTimeout(() => {
+    timers.delete(key);
+    recalcSemester(semesterId).catch((e) => console.error('Schedule recalculation failed:', e.message));
+  }, 800));
+};
+
+export const recalcForCalendarEvent = async (event) => {
+  const filter = { autoScheduled: true, scheduledDate: { $gte: new Date(todayMs()) } };
+  if (event.semester) filter.semester = event.semester;
+  else if (event.department) filter.department = event.department;
+  (await CourseTopic.distinct('semester', filter)).forEach(queue);
+};
+
+export const recalcForExam = async (exam) => { queue(exam.semester); };

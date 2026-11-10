@@ -45,6 +45,8 @@ export const TIMETABLE_STATUS = Object.freeze({
   PUBLISHED: 'published',
 });
 
+// Types that stop teaching on their days (see services/teachingCalendar.js): holiday, midterm_exam, final_exam,
+// summer_vacation, winter_vacation, semester_break. "semester_start", "semester_end" and "event" do not.
 export const CALENDAR_EVENT_TYPES = [
   'semester_start',
   'semester_end',
@@ -52,6 +54,7 @@ export const CALENDAR_EVENT_TYPES = [
   'final_exam',
   'summer_vacation',
   'winter_vacation',
+  'semester_break',
   'holiday',
   'event',
 ];

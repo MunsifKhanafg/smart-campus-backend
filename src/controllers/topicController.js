@@ -3,6 +3,7 @@ import { ApiError, asyncHandler, sendSuccess } from '../utils/apiHelpers.js';
 import { logAudit } from '../utils/audit.js';
 import { uploadHandler } from '../utils/uploadHandler.js';
 import { getCourseFor } from '../services/accessService.js';
+import { assertTeachingDate } from '../services/teachingCalendarService.js';
 import { indexMaterialFile, removeChunksForFile, removeChunksForTopic, syncTopicRelease } from '../services/ragService.js';
 import { toFileDocs, removeStored, sendStored } from '../middleware/upload.js';
 import { ROLES } from '../config/constants.js';
@@ -50,6 +51,8 @@ export const listTopics = asyncHandler(async (req, res) => {
 
 export const createTopic = asyncHandler(async (req, res) => {
   const course = await getCourseFor(req.user, req.body.course, 'write');
+  // A date chosen by hand must be a real teaching day: inside the semester, not a holiday, exam, vacation or weekly holiday.
+  await assertTeachingDate(course, req.body.scheduledDate);
   if (req.body.availableUntil && req.body.availableUntil <= req.body.scheduledDate) {
     throw ApiError.badRequest('"Available until" must be after the scheduled date');
   }
@@ -66,7 +69,12 @@ export const createTopic = asyncHandler(async (req, res) => {
 
 export const updateTopic = asyncHandler(async (req, res) => {
   const topic = await loadTopic(req.params.id);
-  await getCourseFor(req.user, topic.course, 'write');
+  const course = await getCourseFor(req.user, topic.course, 'write');
+  // Changing the date by hand: it must be a teaching day, and the topic is then "pinned" (the scheduler never moves it again).
+  if (req.body.scheduledDate && +new Date(req.body.scheduledDate) !== +topic.scheduledDate) {
+    await assertTeachingDate(course, req.body.scheduledDate);
+    topic.autoScheduled = false;
+  }
   topic.set(req.body);
   if (topic.availableUntil && topic.availableUntil <= topic.scheduledDate) {
     throw ApiError.badRequest('"Available until" must be after the scheduled date');

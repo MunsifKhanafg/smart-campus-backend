@@ -58,4 +58,12 @@ examinationSchema.pre('validate', function (next) {
   next();
 });
 
+// Examination days are not teaching days. When a session is created, moved or deleted, the topics the scheduler placed are recalculated.
+const recalcAfterExam = (doc) =>
+  import('../services/teachingCalendarService.js')
+    .then((m) => m.recalcForExam(doc))
+    .catch((e) => console.error('Schedule recalculation failed:', e.message));
+examinationSchema.post('save', (doc) => { recalcAfterExam(doc); });
+examinationSchema.post('deleteOne', { document: true, query: false }, (doc) => { recalcAfterExam(doc); });
+
 export default mongoose.model('Examination', examinationSchema);
