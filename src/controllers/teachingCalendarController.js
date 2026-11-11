@@ -1,7 +1,7 @@
 import { asyncHandler, sendSuccess } from '../utils/apiHelpers.js';
 import { logAudit } from '../utils/audit.js';
 import { getCourseFor } from '../services/accessService.js';
-import { calendarSummary, scheduleCourseTopics, recalcCourse } from '../services/teachingCalendarService.js';
+import { calendarSummary, scheduleCourseTopics, recalcCourse, regenerateCourseSchedule } from '../services/teachingCalendarService.js';
 import { DAYS } from '../config/constants.js';
 
 // The teaching days of one class: weekdays, semester range, and what the academic calendar removes (holidays, exams, vacations).
@@ -32,5 +32,20 @@ export const autoSchedule = asyncHandler(async (req, res) => {
     result,
     `${result.scheduled} topic(s) placed on ${result.teachingDays} teaching day(s), from ${result.first} to ${result.last}`,
     result.created ? 201 : 200
+  );
+});
+
+// "Regenerate Schedule": the teacher is not satisfied, so every topic still ahead gets a new arrangement (a different number of
+// class days, different days, a different 2/3 pattern). Taught topics and dates typed by hand stay as they are.
+export const regenerateSchedule = asyncHandler(async (req, res) => {
+  const course = await getCourseFor(req.user, req.params.courseId, 'write');
+  const result = await regenerateCourseSchedule(course, req.user._id);
+  logAudit(req, 'topic.regenerate_schedule', 'Course', course._id, { scheduled: result.scheduled, moved: result.moved });
+  sendSuccess(
+    res,
+    result,
+    result.moved
+      ? `New plan ready: ${result.scheduled} topic(s) in ${result.classes} class(es), ${result.perClass.min} to ${result.perClass.max} per class`
+      : 'The plan was arranged again but this was the best fit, so no date changed'
   );
 });

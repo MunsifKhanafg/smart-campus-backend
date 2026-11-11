@@ -8,9 +8,11 @@ import { ApiError, asyncHandler, sendSuccess } from '../utils/apiHelpers.js';
 import { logAudit } from '../utils/audit.js';
 import { notifyUsers } from '../utils/notify.js';
 import { findBlockers } from '../utils/blockers.js';
-import { syncProgramClasses } from '../services/classService.js';
+import Semester from '../models/Semester.js';
+import { syncProgramClasses, subjectsOf, createMissingClasses } from '../services/classService.js';
+import { normalizeCode } from '../services/curriculumService.js';
 import { courseBlockerChecks, purgeCourse } from '../services/courseRemoval.js';
-import { ROLES } from '../config/constants.js';
+import { ROLES, CLOSED_SEMESTER_STATES } from '../config/constants.js';
 
 const escapeRx = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const countSubjects = (p) => p.semesters.reduce((n, s) => n + s.subjects.length, 0);
@@ -48,10 +50,36 @@ const applyAdd = async (r) => {
     await existing.save();
     // Classes made from the old version are brought in line (classes with real records are always kept).
     const classes = await syncProgramClasses(existing, by);
-    return { replaced: true, subjects: countSubjects(p), classes: { removed: classes.removed, created: classes.created, notOffered: classes.notOffered, kept: classes.kept } };
+    return { programId: existing._id, replaced: true, subjects: countSubjects(p), classes: { removed: classes.removed, created: classes.created, notOffered: classes.notOffered, kept: classes.kept } };
   }
-  await Program.create({ name: p.name, department: p.department, semesters, sourceImport: r.import || undefined, createdBy: by });
-  return { replaced: false, subjects: countSubjects(p) };
+  const created = await Program.create({ name: p.name, department: p.department, semesters, sourceImport: r.import || undefined, createdBy: by });
+  return { programId: created._id, replaced: false, subjects: countSubjects(p) };
+};
+
+// The HOD ticked subjects of the curriculum while approving it: those become classes (no teacher yet) in the open semesters of the
+// department that have the same semester number. Everything else stays in the curriculum, not offered. Placeholder slots
+// such as "CS67XX Specialization Elective" are never offered: the HOD picks a real elective instead.
+const offerChosen = async ({ programId, departmentId, codes, sections, by }) => {
+  const program = await Program.findById(programId);
+  const wanted = new Set(codes.map(normalizeCode).filter((c) => !/XX/.test(c)));
+  const semesters = await Semester.find({ department: departmentId, status: { $nin: CLOSED_SEMESTER_STATES } });
+  const out = { classes: 0, studentsEnrolled: 0, semesters: [], noOpenSemester: [] };
+  const usedNumbers = new Set();
+  for (const sem of semesters) {
+    const subjects = subjectsOf(program, sem.number).filter((s) => wanted.has(s.code));
+    if (!subjects.length) continue;
+    usedNumbers.add(sem.number);
+    const { made, enrolled } = await createMissingClasses({ semester: sem, program, subjects, sections, userId: by });
+    out.classes += made.length;
+    out.studentsEnrolled += enrolled;
+    out.semesters.push({ name: sem.name, number: sem.number, subjects: subjects.length });
+  }
+  // chosen subjects whose semester number has no open semester yet: the HOD offers them later on Assign Teachers
+  for (const s of program.semesters) {
+    if (usedNumbers.has(s.number)) continue;
+    if (s.subjects.some((x) => wanted.has(x.code))) out.noOpenSemester.push(s.number);
+  }
+  return out;
 };
 
 const applyDelete = async (r) => {
@@ -183,6 +211,10 @@ export const decideRequest = asyncHandler(async (req, res) => {
   if (decision === 'approve') {
     try {
       result = r.type === 'add' ? await applyAdd(r) : await applyDelete(r);
+      if (r.type === 'add' && req.body.offer?.length) {
+        const by = req.user._id;
+        result.offered = await offerChosen({ programId: result.programId, departmentId: r.department?._id || r.department, codes: req.body.offer, sections: [...new Set(req.body.sections?.length ? req.body.sections : ['A'])], by });
+      }
     } catch (err) {
       await CurriculumRequest.updateOne({ _id: r._id }, { status: 'pending', decidedBy: null, decidedAt: null, decisionMessage: '' }); // nothing was changed: let the HOD try again
       throw err;
@@ -199,7 +231,7 @@ export const decideRequest = asyncHandler(async (req, res) => {
     link: '/curriculum',
   });
   logAudit(req, `curriculum.request_${decision === 'approve' ? 'approved' : 'rejected'}`, 'CurriculumRequest', r._id, { type: r.type, program: r.programName });
-  sendSuccess(res, { status: claimed.status, result }, decision === 'approve' ? (r.type === 'add' ? 'Approved. The curriculum is now saved' : 'Approved. The curriculum was deleted') : 'Rejected. Nothing was changed');
+  sendSuccess(res, { status: claimed.status, result }, decision === 'approve' ? (r.type === 'add' ? `Approved. The curriculum is now saved${result?.offered ? ` and ${result.offered.classes} class(es) were created for the subjects you selected` : '. Choose the subjects to offer on the Assign Teachers page'}` : 'Approved. The curriculum was deleted') : 'Rejected. Nothing was changed');
 });
 
 // The principal withdraws a request that is still waiting.

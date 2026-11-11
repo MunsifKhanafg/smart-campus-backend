@@ -22,7 +22,7 @@ export const topicState = (t, now = new Date()) => {
 
 const shapeForStudent = (t, now) => {
   const state = topicState(t, now);
-  const base = { _id: t._id, course: t.course, title: t.title, scheduledDate: t.scheduledDate, state };
+  const base = { _id: t._id, course: t.course, title: t.title, sequence: t.sequence, scheduledDate: t.scheduledDate, state };
   if (state !== 'available') return base;
   return {
     ...base,
@@ -44,7 +44,7 @@ const loadTopic = async (id) => {
 export const listTopics = asyncHandler(async (req, res) => {
   await getCourseFor(req.user, req.query.course, 'any');
   const now = new Date();
-  const topics = await CourseTopic.find({ course: req.query.course }).sort({ scheduledDate: 1 });
+  const topics = await CourseTopic.find({ course: req.query.course }).sort({ scheduledDate: 1, sequence: 1 });
   const isStudent = req.user.role === ROLES.STUDENT;
   sendSuccess(res, topics.map((t) => (isStudent ? shapeForStudent(t, now) : shapeForStaff(t, now))));
 });
@@ -56,8 +56,11 @@ export const createTopic = asyncHandler(async (req, res) => {
   if (req.body.availableUntil && req.body.availableUntil <= req.body.scheduledDate) {
     throw ApiError.badRequest('"Available until" must be after the scheduled date');
   }
+  // Every topic has a number in the course (1, 2, 3 ...). A topic added by hand gets the next free number.
+  const last = await CourseTopic.findOne({ course: course._id }).sort({ sequence: -1 }).select('sequence').lean();
   const topic = await CourseTopic.create({
     ...req.body,
+    sequence: (last?.sequence || 0) + 1,
     course: course._id,
     department: course.department,
     semester: course.semester._id,

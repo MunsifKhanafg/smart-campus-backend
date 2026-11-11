@@ -8,6 +8,7 @@ import UniversitySettings from '../models/UniversitySettings.js';
 import { ApiError } from '../utils/apiHelpers.js';
 import { notifyUsers } from '../utils/notify.js';
 import { syncTopicRelease } from './ragService.js';
+import { planTopicDays, seededRandom, MIN_PER_CLASS, MAX_PER_CLASS } from './topicPlanner.js';
 import { DAYS, COURSE_STATUS } from '../config/constants.js';
 
 // ==========================================================================================================
@@ -125,7 +126,35 @@ const groupSkipped = (skipped) => {
 export const calendarSummary = async (course) => {
   const all = await teachingCalendar(course);
   const left = await teachingCalendar(course, { from: new Date(todayMs()) });
+
+  // The state of the plan: how the topics are spread, and whether the whole course still fits inside the semester.
+  const topics = await CourseTopic.find({ course: course._id }).select('scheduledDate').lean();
+  const today = todayMs();
+  const perDay = new Map();
+  let last = null;
+  for (const t of topics) {
+    const ms = dayMs(t.scheduledDate);
+    if (last === null || ms > last) last = ms;
+    if (ms >= today) perDay.set(ms, (perDay.get(ms) || 0) + 1);
+  }
+  const loads = [...perDay.values()];
+  const upcoming = loads.reduce((a, b) => a + b, 0);
+  const plan = {
+    total: topics.length,
+    upcoming,
+    past: topics.length - upcoming,
+    classDays: perDay.size,
+    minPerClass: loads.length ? Math.min(...loads) : 0,
+    maxPerClass: loads.length ? Math.max(...loads) : 0,
+    targetPerClass: { min: MIN_PER_CLASS, max: MAX_PER_CLASS },
+    lastTopicDate: last === null ? null : isoDay(last),
+    withinSemester: last === null || last <= all.range.to,
+    capacity: left.dates.length * MAX_PER_CLASS, // topics that fit at 3 per class on the days that are left
+    overCapacity: upcoming > left.dates.length * MAX_PER_CLASS,
+  };
+
   return {
+    plan,
     semester: { name: all.semester.name, startDate: isoDay(dayMs(all.semester.startDate)), endDate: isoDay(dayMs(all.semester.endDate)) },
     range: { from: isoDay(all.range.from), to: isoDay(all.range.to) },
     weekdays: all.weekdays,
@@ -154,9 +183,20 @@ export const assertTeachingDate = async (course, date) => {
   if (cal.blocked.has(t)) throw ApiError.badRequest(`${isoDay(t)} is not a teaching day: ${cal.blocked.get(t)}. Please choose another date`);
 };
 
-// Saves the new dates of a list of topics (new or existing). Returns how many existing topics changed their day.
-const place = async (topics, days) => {
-  const slots = distribute(topics.length, days);
+// Saves the new dates of a list of topics (new or existing). Every class day gets 2 to 3 topics (see topicPlanner.js).
+// regenerate = true: a different arrangement from the current one (different class days and 2/3 pattern).
+// Returns { moved: how many existing topics changed their day, plan }.
+const place = async (topics, days, { regenerate = false } = {}) => {
+  const before = topics.map((t) => (t.isNew ? null : dayMs(t.scheduledDate)));
+  let plan = planTopicDays(topics.length, days);
+  if (regenerate) {
+    // A few tries, in case a random plan happens to be the one the teacher already has.
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      plan = planTopicDays(topics.length, days, { rng: seededRandom(Math.floor(Math.random() * 2 ** 31)) });
+      if (plan.slots.some((s, i) => s !== before[i])) break;
+    }
+  }
+  const slots = plan.slots;
   let moved = 0;
   for (let i = 0; i < topics.length; i += 1) {
     const t = topics[i];
@@ -172,7 +212,7 @@ const place = async (topics, days) => {
       await syncTopicRelease(t).catch(() => {}); // the AI assistant follows the release date
     }
   }
-  return moved;
+  return { moved, plan };
 };
 
 const upcomingAuto = (courseId) =>
@@ -180,7 +220,7 @@ const upcomingAuto = (courseId) =>
 
 // The teacher presses "schedule": the new titles (if any) and every not-yet-taught scheduler topic of the course are spread
 // evenly over the teaching days that are left.
-export const scheduleCourseTopics = async (course, { titles = [], userId = null } = {}) => {
+export const scheduleCourseTopics = async (course, { titles = [], userId = null, regenerate = false } = {}) => {
   const cal = await teachingCalendar(course, { from: new Date(todayMs()) });
   if (!cal.dates.length) {
     throw ApiError.badRequest(
@@ -189,7 +229,9 @@ export const scheduleCourseTopics = async (course, { titles = [], userId = null 
     );
   }
   const existing = await upcomingAuto(course._id);
-  if (!existing.length && !titles.length) throw ApiError.badRequest('There are no topics to schedule');
+  if (!existing.length && !titles.length) {
+    throw ApiError.badRequest(regenerate ? 'There is no plan to regenerate yet. Create the topics from the course contents first' : 'There are no topics to schedule');
+  }
 
   const last = await CourseTopic.findOne({ course: course._id }).sort({ sequence: -1 }).select('sequence').lean();
   let seq = last?.sequence || 0;
@@ -208,18 +250,27 @@ export const scheduleCourseTopics = async (course, { titles = [], userId = null 
       })
   );
   const all = [...existing, ...fresh];
-  const moved = await place(all, cal.dates);
+  const { moved, plan } = await place(all, cal.dates, { regenerate });
   const dates = all.map((t) => dayMs(t.scheduledDate));
   return {
     scheduled: all.length,
     created: fresh.length,
     moved,
+    regenerated: regenerate,
     teachingDays: cal.dates.length,
+    classes: plan.classes,
+    perClass: { min: plan.minPerClass, max: plan.maxPerClass },
+    spareDays: plan.spareDays,
+    overCapacity: plan.overCapacity, // true = more than 3 topics per class were needed to finish inside the semester
     first: isoDay(Math.min(...dates)),
     last: isoDay(Math.max(...dates)),
     skippedPeriods: groupSkipped(cal.skipped),
   };
 };
+
+// "Regenerate Schedule": the teacher is not happy with the plan, so every topic that is still ahead is arranged again.
+// Topics already taught (past dates) and dates the teacher typed by hand are never touched.
+export const regenerateCourseSchedule = (course, userId = null) => scheduleCourseTopics(course, { userId, regenerate: true });
 
 // Recalculates ONE course after the calendar, an exam or the semester dates changed. The teacher is told what moved.
 export const recalcCourse = async (courseId) => {
@@ -240,7 +291,7 @@ export const recalcCourse = async (courseId) => {
     }
     return 0;
   }
-  const moved = await place(topics, cal.dates);
+  const { moved } = await place(topics, cal.dates);
   if (moved > 0 && course.teacher) {
     await notifyUsers([course.teacher], {
       title: `Course schedule updated: ${course.code}`,

@@ -118,7 +118,13 @@ curriculumRouter.post('/programs/:id/resync', authorize(UNIVERSITY_HEAD), idPara
 curriculumRouter.get('/requests', authorize(UNIVERSITY_HEAD, HOD), validate(z.object({ status: z.enum(['pending', 'approved', 'rejected', 'cancelled']).optional() }), 'query'), listRequests);
 curriculumRouter.get('/requests/pending-deletes', authorize(UNIVERSITY_HEAD, HOD), pendingByProgram);
 curriculumRouter.get('/requests/:id', authorize(UNIVERSITY_HEAD, HOD), idParam, getRequest);
-curriculumRouter.post('/requests/:id/decide', authorize(HOD), idParam, validate(z.object({ decision: z.enum(['approve', 'reject']), message: z.string().trim().max(1000).optional() })), decideRequest);
+curriculumRouter.post('/requests/:id/decide', authorize(HOD), idParam, validate(z.object({
+  decision: z.enum(['approve', 'reject']),
+  message: z.string().trim().max(1000).optional(),
+  // HOD, when approving a curriculum: the subjects (codes) to offer right now in the open semesters of the department, and their sections.
+  offer: z.array(z.string().trim().min(2).max(20)).max(80).optional(),
+  sections: z.array(z.string().trim().toUpperCase().min(1).max(10)).min(1).max(8).optional(),
+})), decideRequest);
 curriculumRouter.post('/requests/:id/cancel', authorize(UNIVERSITY_HEAD), idParam, cancelRequest);
 
 // ---------- HOD: teacher assignment board ----------

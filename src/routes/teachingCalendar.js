@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { protect, authorize } from '../middleware/auth.js';
 import { validate, objectId } from '../validators/validate.js';
 import { ROLES, DAYS } from '../config/constants.js';
-import { courseCalendar, setTeachingDays, autoSchedule } from '../controllers/teachingCalendarController.js';
+import { courseCalendar, setTeachingDays, autoSchedule, regenerateSchedule } from '../controllers/teachingCalendarController.js';
 
 const { UNIVERSITY_HEAD, HOD, TEACHER, STUDENT } = ROLES;
 const courseParam = validate(z.object({ courseId: objectId }), 'params');
@@ -20,3 +20,5 @@ teachingCalendarRouter.post(
   validate(z.object({ titles: z.array(z.string().trim().min(2).max(200)).max(80).optional() })),
   autoSchedule
 );
+// "Regenerate Schedule": a new arrangement of every topic that is still ahead (taught and hand-dated topics stay).
+teachingCalendarRouter.post('/course/:courseId/regenerate', authorize(TEACHER), courseParam, regenerateSchedule);
