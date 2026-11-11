@@ -27,7 +27,7 @@ const ALL = [
     extra: 'Draft questions for the teacher with an answer key and a marking scheme. The teacher reviews and finalises them.' },
   { id: 'rubric', icon: '📊', label: 'Marking rubric', hint: 'Criteria and marks for an assignment', placeholder: 'Describe the assignment and total marks...', who: ['staff'],
     extra: 'Create a clear marking rubric as a table: criteria, what each level looks like, and the marks.' },
-  { id: 'records', icon: '🔎', label: 'Search records', hint: 'Find a student, teacher or course by roll number: attendance, fees, exams', placeholder: 'e.g. CS-S1-03   or   attendance of CS-S1-03   or   fees and exam result of 21CS045', who: [], records: true,
+  { id: 'records', icon: '🔎', label: 'Search records', hint: 'Find a student, teacher or course by roll number: attendance, fees, exams', placeholder: 'e.g. attendance of CS-S1-03   ·   fees of Ali Khan   ·   CS-S1-03 (shows everything about the student)', who: [], records: true,
     extra: 'Answer about the students, teachers and courses in the records data supplied. Show the details asked for, as short sections and tables. Never invent records and never go beyond the data supplied.' },
   { id: 'people', icon: '👥', label: 'Students & teachers', hint: 'Names and details of students, teachers and departments', placeholder: 'e.g. List all teachers with their subjects. Show students of semester 3. Details of student CS-S1-03', who: [], leader: true,
     extra: 'Answer about the students, teachers and departments in the people data supplied. Show lists as tables with the details asked for. Never invent people and never go beyond the data supplied.' },
@@ -46,8 +46,10 @@ const ASSISTANT_ROLES = new Set(['university_head', 'hod', 'finance_officer']);
 const strip = ({ who, extra, leader, records, ...m }) => m;
 export const modesFor = (role) => {
   if (!ASSISTANT_ROLES.has(role)) return [];
-  if (role === 'finance_officer') return ALL.filter((m) => m.records).map(strip);
-  return ALL.filter((m) => m.records || m.who.includes('staff') || (m.leader && isLeader(role))).map(strip);
+  // The assistant is ONE search box: it finds a student, teacher or course and shows attendance, fees, examinations or everything.
+  // The study tools (Ask anything, Explain, Quiz ...) and the other lookups were removed from the menu on purpose, so only this
+  // option exists. (The older option definitions stay in this file; findMode() can only return what modesFor() offers.)
+  return ALL.filter((m) => m.records).map(strip);
 };
 export const findMode = (role, id) => modesFor(role).find((m) => m.id === id) || null;
 

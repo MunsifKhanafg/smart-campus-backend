@@ -104,8 +104,10 @@ export const updateSettingsSchema = z.object({
   website: z.string().max(200).optional(),
   officeHours: z.string().max(100).optional(),
   currentAcademicYear: z.string().regex(/^\d{4}-\d{4}$/, 'Use format 2025-2026').optional(),
-  // Days of the week on which nothing is taught anywhere (Sunday by default). Used by the course-content scheduler.
-  weeklyOffDays: z.array(z.enum(DAYS)).max(6, 'At least one day of the week must be a teaching day').optional(),
+  // Days of the week on which nothing is taught anywhere (Sunday by default). The course-content scheduler never uses them.
+  calendarRules: z
+    .object({ weeklyHolidays: z.array(z.enum(DAYS)).max(6, 'At least one day of the week must be a teaching day').optional() })
+    .optional(),
   passingPercentage: z.number().min(0).max(100).optional(),
   gradingRules: z
     .array(gradeRule)

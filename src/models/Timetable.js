@@ -14,4 +14,15 @@ const timetableSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// The days a subject meets decide the teaching days of its course contents, so publishing or changing a timetable re-dates them
+// (services/teachingCalendarService.js). A failure there must never make the timetable save fail.
+timetableSchema.post('save', async (doc) => {
+  try {
+    const { recalcForExam } = await import('../services/teachingCalendarService.js');
+    await recalcForExam({ semester: doc.semester });
+  } catch (err) {
+    console.error('Schedule recalculation after a timetable change failed:', err.message);
+  }
+});
+
 export default mongoose.model('Timetable', timetableSchema);

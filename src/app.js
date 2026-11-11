@@ -15,6 +15,9 @@ import { complaintRouter, announcementRouter, publicContactRouter, reportRouter,
 import { publicAdmissionRouter, applicationRouter } from './routes/applications.js';
 import { stripeWebhook } from './controllers/paymentController.js';
 import { teachingCalendarRouter } from './routes/teachingCalendar.js';
+import { profileRouter, photoRouter } from './routes/profile.js';
+import { staffAttendanceRouter } from './routes/staffAttendance.js';
+import { supportStaffRouter } from './routes/supportStaff.js';
 import { notFound, errorHandler } from './middleware/errorHandler.js';
 import { apiLimiter } from './middleware/rateLimit.js';
 import { BRANDING_DIR } from './middleware/upload.js';
@@ -76,6 +79,10 @@ app.use('/api/auth', authRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/departments', departmentRouter);
 app.use('/api/users', userRouter);
+app.use('/api/profile', profileRouter); // education / degrees / experience and the photo of every person
+app.use('/api/photos', photoRouter);
+app.use('/api/support-staff', supportStaffRouter); // Class IV staff of every department (principal and HODs only)
+app.use('/api/staff-attendance', staffAttendanceRouter); // teachers' own attendance: check-in, late, auto-absent, leave, proof of presence
 app.use('/api/semesters', semesterRouter);
 app.use('/api/courses', courseRouter);
 app.use('/api/curriculum', curriculumRouter);

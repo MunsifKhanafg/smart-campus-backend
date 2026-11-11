@@ -43,6 +43,7 @@ export const NON_TEACHING = {
   final_exam: 'Final examinations',
   summer_vacation: 'Summer vacation',
   winter_vacation: 'Winter vacation',
+  semester_break: 'Semester break',
 };
 
 // Every non-teaching day of a semester -> the reason. (day in ms -> text)

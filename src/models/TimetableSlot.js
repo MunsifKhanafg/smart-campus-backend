@@ -40,4 +40,20 @@ timetableSlotSchema.pre('validate', function (next) {
   next();
 });
 
+// Adding, moving or removing a class changes the days a subject meets, so its course contents are re-dated
+// (services/teachingCalendarService.js, handled once after a burst of changes). Never allowed to make the timetable save fail.
+const recalcAfterSlotChange = async (semester) => {
+  if (!semester) return;
+  try {
+    const { recalcForExam } = await import('../services/teachingCalendarService.js');
+    await recalcForExam({ semester });
+  } catch (err) {
+    console.error('Schedule recalculation after a timetable change failed:', err.message);
+  }
+};
+timetableSlotSchema.post('save', (doc) => recalcAfterSlotChange(doc.semester));
+timetableSlotSchema.post('deleteOne', { document: true, query: false }, (doc) => recalcAfterSlotChange(doc.semester));
+timetableSlotSchema.post('findOneAndDelete', (doc) => doc && recalcAfterSlotChange(doc.semester));
+timetableSlotSchema.post('deleteMany', function afterDeleteMany() { recalcAfterSlotChange(this.getFilter?.().semester); });
+
 export default mongoose.model('TimetableSlot', timetableSlotSchema);

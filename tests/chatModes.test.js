@@ -2,19 +2,31 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { modesFor, findMode, buildSystemPrompt, toModelMessages } from '../src/services/chatModes.js';
 
-test('students get study tools, teachers get teaching tools', () => {
-  const s = modesFor('student').map((m) => m.id);
-  const t = modesFor('teacher').map((m) => m.id);
-  assert.ok(s.includes('plan') && s.includes('quiz') && s.includes('course') && s.includes('general'));
-  assert.ok(!s.includes('lesson') && !s.includes('rubric') && !s.includes('questions'));
-  assert.ok(t.includes('lesson') && t.includes('rubric') && t.includes('questions') && t.includes('course'));
-  assert.ok(!t.includes('plan'));
+// The assistant is ONE search box (records search) for the principal, the HODs and the finance office.
+// The menu of study tools was removed on purpose.
+
+test('the principal, HODs and finance office get exactly one option: the records search', () => {
+  for (const role of ['university_head', 'hod', 'finance_officer']) {
+    assert.deepEqual(modesFor(role).map((m) => m.id), ['records']);
+  }
 });
 
-test('an unknown or forbidden mode is not found', () => {
-  assert.equal(findMode('student', 'rubric'), null);
-  assert.equal(findMode('student', 'nope'), null);
-  assert.equal(findMode('hod', 'rubric').id, 'rubric');
+test('students and teachers do not get the assistant at all', () => {
+  assert.deepEqual(modesFor('student'), []);
+  assert.deepEqual(modesFor('teacher'), []);
+});
+
+test('a removed or unknown option is not found, so it cannot be opened by sending its id', () => {
+  for (const id of ['general', 'explain', 'solve', 'summarize', 'quiz', 'plan', 'writing', 'translate', 'code', 'lesson', 'questions', 'rubric', 'people', 'campus', 'course', 'nope']) {
+    assert.equal(findMode('hod', id), null, id);
+  }
+  assert.equal(findMode('hod', 'records').id, 'records');
+});
+
+test('the records option keeps its search hint (roll number, attendance, fees)', () => {
+  const m = modesFor('hod')[0];
+  assert.match(m.placeholder, /attendance of/);
+  assert.match(m.placeholder, /fees of/);
 });
 
 test('the system prompt always carries the safety rules and the role rule', () => {

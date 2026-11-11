@@ -5,7 +5,7 @@ import { fenceData } from './chatModes.js';
 // The API key lives ONLY in server/.env (AI_API_KEY). The React app never sees it.
 export const llmConfigured = () => !!process.env.AI_API_KEY;
 
-export const callLLM = async ({ system, messages, maxTokens = 800 }) => {
+const callAnthropic = async ({ system, messages, maxTokens = 800 }) => {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'x-api-key': process.env.AI_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
@@ -18,6 +18,24 @@ export const callLLM = async ({ system, messages, maxTokens = 800 }) => {
   const json = await res.json();
   return (json.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
 };
+
+// AI_PROVIDER=openai works with any "OpenAI compatible" service: OpenAI, Groq, Google Gemini, OpenRouter ... (AI_BASE_URL + AI_MODEL).
+const callOpenAICompatible = async ({ system, messages, maxTokens = 800 }) => {
+  const base = (process.env.AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
+  const res = await fetch(`${base}/chat/completions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${process.env.AI_API_KEY}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model: process.env.AI_MODEL || 'gpt-4o-mini', max_tokens: maxTokens, messages: [{ role: 'system', content: system }, ...messages] }),
+  });
+  if (!res.ok) {
+    console.error('AI provider error', res.status, await res.text().catch(() => ''));
+    throw new ApiError(502, 'The AI assistant is unavailable right now. Please try again later');
+  }
+  const json = await res.json();
+  return String(json.choices?.[0]?.message?.content || '').trim();
+};
+
+export const callLLM = (args) => (String(process.env.AI_PROVIDER || 'anthropic').toLowerCase() === 'anthropic' ? callAnthropic(args) : callOpenAICompatible(args));
 
 const SYSTEM = `You are a course study assistant for university students.
 Rules:

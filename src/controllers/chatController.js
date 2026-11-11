@@ -29,7 +29,18 @@ const CAMPUS_RULES = `The user's own university facts are inside <campus_data>. 
 //   campus  -> answers about the user's own subjects, teachers, timetable and course contents (from the database)
 //   others  -> a general academic assistant, like ChatGPT, limited to educational topics
 export const chat = asyncHandler(async (req, res) => {
-  const mode = findMode(req.user.role, req.body.mode || 'general');
+  // The assistant has one option now (the records search). An old chat or an old page that still sends another option is
+  // simply answered by the records search.
+  let mode = findMode(req.user.role, req.body.mode || 'records') || findMode(req.user.role, 'records');
+  let note = '';
+  // Without an AI key only the record searches can be answered. Instead of an error, the records are searched.
+  if (mode && !llmConfigured() && !['course', 'records', 'people', 'campus'].includes(mode.id)) {
+    const records = findMode(req.user.role, 'records');
+    if (records) {
+      mode = records;
+      note = '\n\n_The AI chat is not switched on, so I searched the records instead. Type a roll number, a name, an email or a course code._';
+    }
+  }
   if (!mode) throw ApiError.badRequest('This assistant option is not available for your role');
   const message = req.body.message;
 
@@ -124,6 +135,7 @@ export const chat = asyncHandler(async (req, res) => {
     if (!answer) throw new ApiError(502, 'The assistant returned an empty answer. Please try again');
   }
 
+  if (note) answer += note;
   convo = convo || new AIConversation({ user: req.user._id, mode: mode.id, course: course?._id, title: message.slice(0, 60) });
   convo.messages.push({ role: 'user', content: cut(message) });
   convo.messages.push({ role: 'assistant', content: cut(answer), sources, grounded });

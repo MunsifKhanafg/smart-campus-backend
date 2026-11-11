@@ -5,8 +5,8 @@ import { SEMESTER_STATUS, COURSE_STATUS, DAYS } from '../config/constants.js';
 const date = z.coerce.date();
 
 // ---------- Semesters ----------
-// The end date can be left out: it is then calculated from the start date and durationWeeks (default 16 weeks)
-// and follows every later change of them. Typing an end date makes it manual (endDateManual = true).
+// The end date can be left out: the server calculates it from the start date and durationWeeks
+// (services/semesterDates.js) and calculates it again whenever either of them changes. Typing an end date makes it manual.
 const durationWeeks = z.number().int().min(1).max(52);
 
 export const createSemesterSchema = z
@@ -17,10 +17,8 @@ export const createSemesterSchema = z
     startDate: date,
     durationWeeks: durationWeeks.optional(),
     endDate: date.optional(),
-    endDateManual: z.boolean().optional(),
   })
-  .refine((v) => !v.endDate || v.endDate > v.startDate, { message: 'End date must be after the start date', path: ['endDate'] })
-  .refine((v) => v.endDateManual === false || v.endDate || true, { message: 'Invalid end date', path: ['endDate'] });
+  .refine((v) => !v.endDate || v.endDate > v.startDate, { message: 'End date must be after the start date', path: ['endDate'] });
 
 export const updateSemesterSchema = z.object({
   name: z.string().trim().min(2).max(100).optional(),
@@ -29,7 +27,6 @@ export const updateSemesterSchema = z.object({
   startDate: date.optional(),
   durationWeeks: durationWeeks.optional(),
   endDate: date.optional(),
-  endDateManual: z.boolean().optional(),
 });
 
 export const semesterStatusSchema = z.object({ status: z.enum(Object.values(SEMESTER_STATUS)) });
@@ -50,10 +47,10 @@ const courseFields = {
   title: z.string().trim().min(2).max(150),
   code: z.string().trim().min(2).max(20),
   creditHours: z.number().int().min(1).max(6),
-  // Weekly teaching hours when they differ from the credit hours. null = same as the credit hours. There is no upper limit
-  // other than 30, and a teacher may hold any number of classes: only time clashes are refused.
-  weeklyHours: z.number().int().min(1).max(30).nullable().optional(),
-  isCommon: z.boolean().optional(), // subject taught in several departments (English, Mathematics, Islamiat, Pakistan Studies ...)
+  // Hours per week when they differ from the credit hours. null = same as the credit hours. A teacher may hold any number
+  // of classes: only time clashes (and the teacher's own weekly limit, if one was set) are refused.
+  weeklyClasses: z.number().int().min(1).max(40).nullable().optional(),
+  // The weekdays the teacher really teaches this class (empty = taken from the timetable).
   teachingDays: z.array(z.enum(DAYS)).max(7).optional(),
   description: z.string().max(2000).optional(),
   outline: z.string().max(10000).optional(),

@@ -30,6 +30,48 @@ const userSchema = new mongoose.Schema(
     allDepartments: { type: Boolean, default: false },
     // Weekly teaching hours the administrator allows for this teacher. Empty = no limit has been set.
     maxWeeklyHours: { type: Number, min: 1, max: 60, default: null },
+    // Professional and personal details of a teacher, HOD, principal or finance officer: education and degrees, experience, designation.
+    // Not sent with the normal user lists (select: false). The profile route asks for it and decides who may read which part.
+    profile: {
+      type: new mongoose.Schema(
+        {
+          designation: { type: String, trim: true, maxlength: 100, default: '' }, // Lecturer, Assistant Professor, Principal ...
+          gender: { type: String, enum: ['', 'male', 'female', 'other'], default: '' },
+          dateOfBirth: Date,
+          joiningDate: Date,
+          address: { type: String, trim: true, maxlength: 250, default: '' },
+          city: { type: String, trim: true, maxlength: 60, default: '' },
+          experienceYears: { type: Number, min: 0, max: 60, default: null },
+          bio: { type: String, trim: true, maxlength: 1500, default: '' },
+          education: [
+            {
+              level: { type: String, enum: ['matric', 'intermediate', 'bachelors', 'masters', 'mphil', 'phd', 'postdoc', 'diploma', 'other'], required: true },
+              degree: { type: String, required: true, trim: true, maxlength: 120 },
+              field: { type: String, trim: true, maxlength: 120, default: '' },
+              institution: { type: String, required: true, trim: true, maxlength: 150 },
+              year: Number,
+              grade: { type: String, trim: true, maxlength: 40, default: '' },
+              _id: false,
+            },
+          ],
+          experience: [
+            {
+              title: { type: String, required: true, trim: true, maxlength: 120 },
+              organization: { type: String, required: true, trim: true, maxlength: 150 },
+              fromYear: Number,
+              toYear: Number,
+              details: { type: String, trim: true, maxlength: 500, default: '' },
+              _id: false,
+            },
+          ],
+        },
+        { _id: false }
+      ),
+      select: false,
+    },
+    // The photo itself is in the UserPhoto collection. These two fields only say that one exists and when it changed (for caching).
+    hasPhoto: { type: Boolean, default: false },
+    photoUpdatedAt: Date,
     isActive: { type: Boolean, default: true },
     mustChangePassword: { type: Boolean, default: false },
     passwordChangedAt: Date,
