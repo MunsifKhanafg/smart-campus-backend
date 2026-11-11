@@ -29,7 +29,7 @@ import {
 
 const populateProfile = (q) =>
   q
-    .populate('user', 'name email phone isActive')
+    .populate('user', 'name email phone isActive hasPhoto photoUpdatedAt')
     .populate('department', 'name code')
     .populate('semester', 'name number academicYear status');
 

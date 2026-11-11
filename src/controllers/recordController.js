@@ -15,7 +15,7 @@ import { ATTEMPT_STATUS, RESULT_STATUS, PAYMENT_STATUS } from '../config/constan
 // The complete academic history of one student, grouped by semester (requirement 16).
 export const buildRecord = async (userId) => {
   const profile = await StudentProfile.findOne({ user: userId })
-    .populate('user', 'name email phone')
+    .populate('user', 'name email phone hasPhoto photoUpdatedAt')
     .populate('department', 'name code')
     .populate('semester', 'name number academicYear status');
   if (!profile) throw ApiError.notFound('Student not found');

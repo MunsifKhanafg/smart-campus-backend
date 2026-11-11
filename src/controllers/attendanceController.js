@@ -9,6 +9,7 @@ import { dayStart, round2 } from '../utils/oid.js';
 import { getCourseFor, enrolledStudentIds, studentCourseIds } from '../services/accessService.js';
 import { attendancePercent, attendanceCounts, emptyCounts } from '../services/attendanceService.js';
 import { ROLES } from '../config/constants.js';
+import { studentsOnLeave } from './studentLeaveController.js';
 
 const rulesOf = async () => {
   const s = await UniversitySettings.getSettings();
@@ -29,9 +30,11 @@ export const getSheet = asyncHandler(async (req, res) => {
   ]);
   const roll = new Map(profiles.map((p) => [String(p.user), p.rollNumber]));
   const saved = new Map((existing?.records || []).map((r) => [String(r.student), r.status]));
+  // A student whose leave was approved for this day starts as "leave" (the teacher can still change it).
+  const onLeave = await studentsOnLeave(date, studentIds);
 
   const students = users
-    .map((u) => ({ student: u._id, name: u.name, rollNumber: roll.get(String(u._id)) || '', status: saved.get(String(u._id)) || null }))
+    .map((u) => ({ student: u._id, name: u.name, rollNumber: roll.get(String(u._id)) || '', status: saved.get(String(u._id)) || (onLeave.has(String(u._id)) ? 'leave' : null), onApprovedLeave: onLeave.has(String(u._id)) }))
     .sort((a, b) => a.rollNumber.localeCompare(b.rollNumber));
   sendSuccess(res, { date, alreadyMarked: !!existing, students });
 });
@@ -50,9 +53,13 @@ export const saveAttendance = asyncHandler(async (req, res) => {
   if (sent.some((id) => !enrolled.includes(id))) throw ApiError.badRequest('The sheet contains a student who is not enrolled in this course');
   if (enrolled.some((id) => !sent.includes(id))) throw ApiError.badRequest('Please mark every enrolled student (present, absent or leave)');
 
+  // "Absent" for a student whose leave was approved for this day is saved as "leave".
+  const onLeave = await studentsOnLeave(date, enrolled);
+  const records = req.body.records.map((r) => (r.status === 'absent' && onLeave.has(String(r.student)) ? { ...r, status: 'leave' } : r));
+
   const doc = await Attendance.findOneAndUpdate(
     { course: course._id, date },
-    { $set: { records: req.body.records, markedBy: req.user._id, department: course.department, semester: course.semester._id } },
+    { $set: { records, markedBy: req.user._id, department: course.department, semester: course.semester._id } },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
   logAudit(req, 'attendance.save', 'Attendance', doc._id, { course: course.code, date: date.toISOString().slice(0, 10) });

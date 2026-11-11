@@ -26,3 +26,18 @@ export const markAllRead = asyncHandler(async (req, res) => {
   await Notification.updateMany({ recipient: req.user._id, isRead: false }, { isRead: true, readAt: new Date() });
   sendSuccess(res, null, 'All notifications marked as read');
 });
+
+// Remove one notification from my history. Only my own can be removed.
+export const deleteNotification = asyncHandler(async (req, res) => {
+  const n = await Notification.findOneAndDelete({ _id: req.params.id, recipient: req.user._id });
+  if (!n) throw ApiError.notFound('Notification not found');
+  sendSuccess(res, null, 'Notification removed');
+});
+
+// Clear my history: everything, or only the ones I already read (?readOnly=true).
+export const clearNotifications = asyncHandler(async (req, res) => {
+  const filter = { recipient: req.user._id };
+  if (req.query.readOnly === 'true') filter.isRead = true;
+  const { deletedCount } = await Notification.deleteMany(filter);
+  sendSuccess(res, { deleted: deletedCount }, deletedCount ? `${deletedCount} notification(s) removed` : 'There was nothing to remove');
+});

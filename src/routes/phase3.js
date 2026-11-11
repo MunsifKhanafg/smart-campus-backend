@@ -42,7 +42,7 @@ import {
   myTimetable,
 } from '../controllers/timetableController.js';
 import { listEvents, createEvent, updateEvent, deleteEvent } from '../controllers/calendarController.js';
-import { listMyNotifications, markRead, markAllRead } from '../controllers/notificationController.js';
+import { listMyNotifications, markRead, markAllRead, deleteNotification, clearNotifications } from '../controllers/notificationController.js';
 
 const { UNIVERSITY_HEAD, HOD, TEACHER, STUDENT } = ROLES;
 const idParam = validate(z.object({ id: objectId }), 'params');
@@ -98,4 +98,6 @@ export const notificationRouter = Router();
 notificationRouter.use(protect);
 notificationRouter.get('/', validate(notificationsQuery, 'query'), listMyNotifications);
 notificationRouter.post('/read-all', markAllRead);
+notificationRouter.delete('/', clearNotifications); // clear my history (?readOnly=true keeps the unread ones)
+notificationRouter.delete('/:id', idParam, deleteNotification);
 notificationRouter.patch('/:id/read', idParam, markRead);
