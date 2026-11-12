@@ -21,9 +21,10 @@ const reviewSchema = z.object({ status: z.enum(['approved', 'rejected']), note: 
 const listQuery = z.object({ status: z.enum(['pending', 'approved', 'rejected', 'cancelled']).optional(), department: objectId.optional() });
 
 // Mounted on /api/student-leaves
+// student: asks and cancels · HOD: sees and decides the requests of their department · principal: sees everything (read only)
 export const studentLeaveRouter = Router();
 studentLeaveRouter.use(protect);
 studentLeaveRouter.get('/', authorize(STUDENT, HOD, UNIVERSITY_HEAD), validate(listQuery, 'query'), listLeaves);
 studentLeaveRouter.post('/', authorize(STUDENT), validate(leaveSchema), requestLeave);
-studentLeaveRouter.patch('/:id/review', authorize(HOD, UNIVERSITY_HEAD), idParam, validate(reviewSchema), reviewLeave);
+studentLeaveRouter.patch('/:id/review', authorize(HOD), idParam, validate(reviewSchema), reviewLeave);
 studentLeaveRouter.delete('/:id', authorize(STUDENT), idParam, cancelLeave);

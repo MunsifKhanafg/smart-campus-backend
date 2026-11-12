@@ -1,6 +1,7 @@
 import User from '../models/User.js';
 import StudentProfile from '../models/StudentProfile.js';
 import StudentLeave from '../models/StudentLeave.js';
+import Attendance from '../models/Attendance.js';
 import { ApiError, asyncHandler, sendSuccess } from '../utils/apiHelpers.js';
 import { logAudit } from '../utils/audit.js';
 import { notifyUsers } from '../utils/notify.js';
@@ -18,6 +19,19 @@ export const studentsOnLeave = async (date, studentIds) => {
   const k = key(date);
   const rows = await StudentLeave.find({ status: 'approved', fromDate: { $lte: k }, toDate: { $gte: k }, student: { $in: studentIds } }).select('student').lean();
   return new Set(rows.map((r) => String(r.student)));
+};
+
+// Attendance that was ALREADY taken for days inside an approved leave: "absent" becomes "leave".
+// (Days taken later are handled by studentsOnLeave in the attendance sheet.) Present stays present.
+const markLeaveInAttendance = async (leave) => {
+  const from = new Date(`${leave.fromDate}T00:00:00.000Z`);
+  const to = new Date(`${leave.toDate}T00:00:00.000Z`);
+  const r = await Attendance.updateMany(
+    { date: { $gte: from, $lte: to }, records: { $elemMatch: { student: leave.student, status: 'absent' } } },
+    { $set: { 'records.$[r].status': 'leave' } },
+    { arrayFilters: [{ 'r.student': leave.student, 'r.status': 'absent' }] }
+  );
+  return r.modifiedCount || 0;
 };
 
 // ---------- the student ----------
@@ -70,10 +84,11 @@ export const listLeaves = asyncHandler(async (req, res) => {
   sendSuccess(res, leaves.map((l) => ({ ...l, rollNumber: roll.get(String(l.student?._id)) || '' })));
 });
 
+// Only the HOD of the student's department decides. The principal can see every request but not decide.
 export const reviewLeave = asyncHandler(async (req, res) => {
   const leave = await StudentLeave.findById(req.params.id).populate('student', 'name');
   if (!leave) throw ApiError.notFound('Leave request not found');
-  if (req.user.role === ROLES.HOD && String(req.user.department) !== String(leave.department)) throw ApiError.forbidden('You can only decide the requests of your own department');
+  if (String(req.user.department) !== String(leave.department)) throw ApiError.forbidden('You can only decide the requests of your own department');
   if (leave.status !== 'pending') throw ApiError.conflict(`This request was already ${leave.status}`);
 
   leave.status = req.body.status;
@@ -81,12 +96,16 @@ export const reviewLeave = asyncHandler(async (req, res) => {
   leave.reviewedBy = req.user._id;
   leave.reviewedAt = new Date();
   await leave.save();
+
+  let updated = 0;
+  if (leave.status === 'approved') updated = await markLeaveInAttendance(leave);
+
   await notifyUsers([leave.student._id], {
     title: `Leave ${leave.status}`,
     message: `Your leave from ${leave.fromDate} to ${leave.toDate} was ${leave.status} by ${req.user.name}.${leave.reviewNote ? ` Note: ${leave.reviewNote}` : ''}`,
     type: 'leave',
     link: '/student-leave',
   });
-  logAudit(req, `student_leave.${leave.status}`, 'StudentLeave', leave._id, { student: leave.student.name });
-  sendSuccess(res, leave, leave.status === 'approved' ? 'Approved. The student will not be counted absent on those days' : 'Rejected');
+  logAudit(req, `student_leave.${leave.status}`, 'StudentLeave', leave._id, { student: leave.student.name, attendanceSheetsUpdated: updated });
+  sendSuccess(res, leave, leave.status === 'approved' ? 'Approved. The student will be marked Leave, not Absent, on those days' : 'Rejected');
 });

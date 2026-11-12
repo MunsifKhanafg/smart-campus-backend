@@ -7,6 +7,7 @@ import { logAudit } from '../utils/audit.js';
 import { notifyUsers } from '../utils/notify.js';
 import { uploadHandler } from '../utils/uploadHandler.js';
 import { getCourseFor, enrolledStudentIds } from '../services/accessService.js';
+import { rearrangeForAssessment } from '../services/teachingCalendarService.js';
 import { toFileDocs, removeStored, sendStored } from '../middleware/upload.js';
 import { ROLES } from '../config/constants.js';
 
@@ -97,7 +98,9 @@ export const createAssignment = asyncHandler(async (req, res) => {
     link: `/my-courses/${course._id}`,
   });
   logAudit(req, 'assignment.create', 'Assignment', a._id, { course: course.code, title: a.title });
-  sendSuccess(res, staffShape(a), 'Assignment created', 201);
+  // A presentation takes its day: topics planned on that day move to the next teaching days.
+  const moved = a.type === 'presentation' ? await rearrangeForAssessment(course._id, `the presentation "${a.title}"`) : 0;
+  sendSuccess(res, { ...staffShape(a), topicsMoved: moved }, moved ? `Presentation created. ${moved} topic(s) were moved because that day is now a presentation day` : 'Assignment created', 201);
 });
 
 export const updateAssignment = asyncHandler(async (req, res) => {
@@ -112,7 +115,8 @@ export const updateAssignment = asyncHandler(async (req, res) => {
   if (a.deadline <= a.releaseDate) throw ApiError.badRequest('Deadline must be after the release date');
   await a.save();
   logAudit(req, 'assignment.update', 'Assignment', a._id, { fields: Object.keys(req.body) });
-  sendSuccess(res, staffShape(a), 'Assignment updated');
+  const moved = a.type === 'presentation' && req.body.deadline ? await rearrangeForAssessment(a.course, `the presentation "${a.title}"`) : 0;
+  sendSuccess(res, { ...staffShape(a), topicsMoved: moved }, moved ? `Assignment updated. ${moved} topic(s) were moved because of the new presentation day` : 'Assignment updated');
 });
 
 export const deleteAssignment = asyncHandler(async (req, res) => {
@@ -122,6 +126,7 @@ export const deleteAssignment = asyncHandler(async (req, res) => {
   removeStored('assignments', a.attachments);
   await a.deleteOne();
   logAudit(req, 'assignment.delete', 'Assignment', a._id);
+  if (a.type === 'presentation') await rearrangeForAssessment(a.course, `the removed presentation "${a.title}"`);
   sendSuccess(res, null, 'Assignment deleted');
 });
 

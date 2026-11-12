@@ -20,7 +20,9 @@ import { localNow, addDays, weekdayOf, eachDay, toMinutes } from './staffAttenda
 // The pure rules (time window, late flag, campus distance) are in staffAttendanceRules.js.
 // ============================================================================================================
 
-export const STAFF_ROLES = [ROLES.TEACHER, ROLES.HOD];
+// Everyone who works at the college and marks their own day: teachers, HODs and the finance officer (the finance officer has
+// no department and no classes, so only the check-in, the leave and the principal's review apply to them).
+export const STAFF_ROLES = [ROLES.TEACHER, ROLES.HOD, ROLES.FINANCE_OFFICER];
 // Calendar entries on which the college itself is closed (examinations are NOT in this list: the teachers still come).
 const CLOSED_TYPES = ['holiday', 'summer_vacation', 'winter_vacation', 'semester_break'];
 const dayRange = (key) => ({ $gte: new Date(`${key}T00:00:00Z`), $lt: new Date(`${addDays(key, 1)}T00:00:00Z`) });

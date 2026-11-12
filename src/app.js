@@ -18,6 +18,7 @@ import { teachingCalendarRouter } from './routes/teachingCalendar.js';
 import { profileRouter, photoRouter } from './routes/profile.js';
 import { staffAttendanceRouter } from './routes/staffAttendance.js';
 import { supportStaffRouter } from './routes/supportStaff.js';
+import { studentLeaveRouter } from './routes/studentLeave.js';
 import { notFound, errorHandler } from './middleware/errorHandler.js';
 import { apiLimiter } from './middleware/rateLimit.js';
 import { BRANDING_DIR } from './middleware/upload.js';
@@ -81,7 +82,8 @@ app.use('/api/departments', departmentRouter);
 app.use('/api/users', userRouter);
 app.use('/api/profile', profileRouter); // education / degrees / experience and the photo of every person
 app.use('/api/photos', photoRouter);
-app.use('/api/support-staff', supportStaffRouter); // Class IV staff of every department (principal and HODs only)
+app.use('/api/support-staff', supportStaffRouter); // Class IV staff and their daily duties (principal and HODs only)
+app.use('/api/student-leaves', studentLeaveRouter); // student leave: student asks, HOD decides, principal views
 app.use('/api/staff-attendance', staffAttendanceRouter); // teachers' own attendance: check-in, late, auto-absent, leave, proof of presence
 app.use('/api/semesters', semesterRouter);
 app.use('/api/courses', courseRouter);

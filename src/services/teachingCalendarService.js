@@ -4,10 +4,12 @@ import Semester from '../models/Semester.js';
 import Course from '../models/Course.js';
 import CourseTopic from '../models/CourseTopic.js';
 import TimetableSlot from '../models/TimetableSlot.js';
+import Quiz from '../models/Quiz.js';
+import Assignment from '../models/Assignment.js';
 import UniversitySettings from '../models/UniversitySettings.js';
 import { ApiError } from '../utils/apiHelpers.js';
 import { notifyUsers } from '../utils/notify.js';
-import { syncTopicRelease } from './ragService.js';
+import { syncTopicRelease, removeChunksForTopic } from './ragService.js';
 import { planTopicDays, seededRandom, MIN_PER_CLASS, MAX_PER_CLASS } from './topicPlanner.js';
 import { DAYS, COURSE_STATUS } from '../config/constants.js';
 
@@ -76,6 +78,25 @@ export const blockedDays = async (semester, settings) => {
   return blocked;
 };
 
+// Quizzes and presentations of ONE class with the day they fall on. A topic is never planned on these days.
+//   scheduled quiz -> the day it starts, surprise quiz -> the day the teacher started it, presentation -> its date (the deadline)
+export const assessmentDays = async (course) => {
+  const [quizzes, presentations] = await Promise.all([
+    Quiz.find({ course: course._id, $or: [{ type: 'scheduled', startTime: { $ne: null } }, { type: 'surprise', startedAt: { $ne: null } }] }).select('title type startTime startedAt').lean(),
+    Assignment.find({ course: course._id, type: 'presentation' }).select('title deadline').lean(),
+  ]);
+  const rows = [];
+  quizzes.forEach((q) => { const d = q.type === 'scheduled' ? q.startTime : q.startedAt; if (d) rows.push({ ms: dayMs(d), kind: 'quiz', title: q.title }); });
+  presentations.forEach((p) => { if (p.deadline) rows.push({ ms: dayMs(p.deadline), kind: 'presentation', title: p.title }); });
+  return rows
+    .sort((a, b) => a.ms - b.ms)
+    .map((r) => ({ date: isoDay(r.ms), ms: r.ms, kind: r.kind, title: r.title, reason: `${r.kind === 'quiz' ? 'Quiz' : 'Presentation'}: ${r.title}` }));
+};
+
+const addAssessmentDays = async (course, blocked, from, to) => {
+  for (const a of await assessmentDays(course)) if (a.ms >= from && a.ms <= to && !blocked.has(a.ms)) blocked.set(a.ms, a.reason);
+};
+
 // The weekdays this class is taught on, and where that information comes from.
 export const courseWeekdays = async (course, settings) => {
   if (course.teachingDays?.length) return { days: DAYS.filter((d) => course.teachingDays.includes(d)), source: 'teacher' };
@@ -92,6 +113,7 @@ export const teachingCalendar = async (course, { from } = {}) => {
   if (!semester) throw ApiError.notFound('The semester of this class was not found');
 
   const blocked = await blockedDays(semester, settings);
+  await addAssessmentDays(course, blocked, dayMs(semester.startDate), dayMs(semester.endDate));
   const { days, source } = await courseWeekdays(course, settings);
   const wanted = new Set(days);
   const semFrom = dayMs(semester.startDate);
@@ -155,6 +177,7 @@ export const calendarSummary = async (course) => {
 
   return {
     plan,
+    assessmentDays: (await assessmentDays(course)).map(({ date, kind, title }) => ({ date, kind, title })),
     semester: { name: all.semester.name, startDate: isoDay(dayMs(all.semester.startDate)), endDate: isoDay(dayMs(all.semester.endDate)) },
     range: { from: isoDay(all.range.from), to: isoDay(all.range.to) },
     weekdays: all.weekdays,
@@ -220,13 +243,21 @@ const upcomingAuto = (courseId) =>
 
 // The teacher presses "schedule": the new titles (if any) and every not-yet-taught scheduler topic of the course are spread
 // evenly over the teaching days that are left.
-export const scheduleCourseTopics = async (course, { titles = [], userId = null, regenerate = false } = {}) => {
+export const scheduleCourseTopics = async (course, { titles = [], userId = null, regenerate = false, replace = false } = {}) => {
   const cal = await teachingCalendar(course, { from: new Date(todayMs()) });
   if (!cal.dates.length) {
     throw ApiError.badRequest(
       `There are no teaching days left for this class between today and ${isoDay(cal.range.to)}. ` +
         'Check the teaching days of the class, the semester dates and the holidays or examinations in the academic calendar'
     );
+  }
+  // replace: every topic that is still ahead and has no uploaded files is removed first (this includes the old big topics made before
+  // the contents were split), so the small topics of the contents take their place. Taught topics and topics with files stay untouched.
+  if (replace) {
+    if (!titles.length) throw ApiError.badRequest('There are no course contents to build the new plan from');
+    const old = await CourseTopic.find({ course: course._id, scheduledDate: { $gte: new Date(todayMs()) }, 'materials.0': { $exists: false } }).select('_id');
+    for (const t of old) await removeChunksForTopic(t._id).catch(() => {});
+    await CourseTopic.deleteMany({ _id: { $in: old.map((t) => t._id) } });
   }
   const existing = await upcomingAuto(course._id);
   if (!existing.length && !titles.length) {
@@ -273,7 +304,7 @@ export const scheduleCourseTopics = async (course, { titles = [], userId = null,
 export const regenerateCourseSchedule = (course, userId = null) => scheduleCourseTopics(course, { userId, regenerate: true });
 
 // Recalculates ONE course after the calendar, an exam or the semester dates changed. The teacher is told what moved.
-export const recalcCourse = async (courseId) => {
+export const recalcCourse = async (courseId, reason = '') => {
   const course = await Course.findById(courseId).populate('semester');
   if (!course || course.status !== COURSE_STATUS.ACTIVE) return 0;
   const topics = await upcomingAuto(course._id);
@@ -295,12 +326,23 @@ export const recalcCourse = async (courseId) => {
   if (moved > 0 && course.teacher) {
     await notifyUsers([course.teacher], {
       title: `Course schedule updated: ${course.code}`,
-      message: `${moved} topic date(s) were recalculated because the academic calendar, an examination or the semester dates changed. Topics only fall on real teaching days.`,
+      message: `${moved} topic date(s) were recalculated ${reason || 'because the academic calendar, an examination or the semester dates changed'}. Topics only fall on real teaching days.`,
       type: 'schedule',
       link: `/courses/${course._id}`,
     });
   }
   return moved;
+};
+
+// A quiz or a presentation was added, moved or removed: the topics of that class that are still ahead are arranged again,
+// so no topic stays on a quiz or presentation day. Never throws (the quiz or assignment itself is already saved). Returns how many moved.
+export const rearrangeForAssessment = async (courseId, what) => {
+  try {
+    return await recalcCourse(courseId, `because of ${what}: no topic is planned on a quiz or presentation day`);
+  } catch (e) {
+    console.error('Schedule rearrangement failed:', e.message);
+    return 0;
+  }
 };
 
 export const recalcSemester = async (semesterId) => {

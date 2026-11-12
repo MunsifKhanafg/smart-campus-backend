@@ -13,6 +13,8 @@ const academicCalendarSchema = new mongoose.Schema(
     // Optional: limits the event to one semester (for example a midterm of semester 3 only).
     semester: { type: mongoose.Schema.Types.ObjectId, ref: 'Semester', default: null, index: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    // 'default' = created by "Create default calendar" (hot / cold area). Re-creating a default calendar replaces only these.
+    source: { type: String, enum: ['manual', 'default'], default: 'manual' },
   },
   { timestamps: true }
 );

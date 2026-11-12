@@ -9,6 +9,7 @@ import { logAudit } from '../utils/audit.js';
 import { notifyUsers } from '../utils/notify.js';
 import { autoEnrollSemester } from '../services/enrollmentService.js';
 import { computeEndDate, DEFAULT_SEMESTER_WEEKS } from '../services/semesterDates.js';
+import { suggestSemesterDates, endFromCalendar } from '../services/semesterFromCalendar.js';
 import { recalcSemester } from '../services/teachingCalendarService.js';
 import Attendance from '../models/Attendance.js';
 import Examination from '../models/Examination.js';
@@ -61,24 +62,52 @@ export const getSemester = asyncHandler(async (req, res) => {
   sendSuccess(res, semester);
 });
 
+// The calendar entries that decide semester dates: university-wide ones and the department's own.
+const calendarEvents = (departmentId) =>
+  AcademicCalendar.find({ type: { $in: ['semester_start', 'semester_end', 'final_exam'] }, $or: [{ department: null }, { department: departmentId }] }).lean();
+
+// What the academic calendar says about the next semester (the create form shows it before saving). null = the calendar has none yet.
+export const calendarDates = asyncHandler(async (req, res) => {
+  const events = await calendarEvents(req.user.department);
+  sendSuccess(res, suggestSemesterDates({ events, departmentId: req.user.department }));
+});
+
 // Only an HOD creates semesters, and always inside their own department.
 export const createSemester = asyncHandler(async (req, res) => {
   const dept = await Department.findById(req.user.department);
   if (!dept || dept.status !== DEPARTMENT_STATUS.ACTIVE) throw ApiError.badRequest('Your department is not active');
 
-  // The end date is calculated from the start date and the duration in weeks, unless the HOD typed one by hand.
-  const { endDate, durationWeeks, ...rest } = req.body;
+  // The dates come from the ACADEMIC CALENDAR. Start date left empty: the next semester start of the calendar is used, with its end
+  // (the calendar's "semester ends", else the end of the final examinations, else start + duration). A typed start date still gets
+  // its end from the calendar when it has one. An end date typed by hand always wins and is kept (endDateManual).
+  const { endDate: typedEnd, startDate: typedStart, durationWeeks, ...rest } = req.body;
   const weeks = durationWeeks || DEFAULT_SEMESTER_WEEKS;
+  const events = await calendarEvents(dept._id);
+  let startDate = typedStart;
+  let endDate = typedEnd;
+  let source = 'the dates you typed';
+  if (!startDate) {
+    const s = suggestSemesterDates({ events, departmentId: dept._id, weeks });
+    if (!s) throw ApiError.badRequest('The academic calendar has no semester start yet. Create the default calendar (Calendar > Default calendar), or type the start date');
+    startDate = s.startDate;
+    endDate = endDate || s.endDate;
+    source = s.source;
+  } else if (!endDate) {
+    const e = endFromCalendar({ events, start: startDate, departmentId: dept._id });
+    if (e) { endDate = e.endDate; source = e.source; }
+  }
   const semester = await Semester.create({
     ...rest,
+    startDate,
     durationWeeks: weeks,
-    endDate: endDate || computeEndDate(rest.startDate, weeks),
-    endDateManual: !!endDate,
+    endDate: endDate || computeEndDate(startDate, weeks),
+    endDateManual: !!typedEnd,
     department: dept._id,
     createdBy: req.user._id,
   });
-  logAudit(req, 'semester.create', 'Semester', semester._id, { name: semester.name });
-  sendSuccess(res, await findSemester(semester._id), 'Semester created', 201);
+  logAudit(req, 'semester.create', 'Semester', semester._id, { name: semester.name, startDate: semester.startDate, endDate: semester.endDate, source });
+  const day = (d) => d.toISOString().slice(0, 10);
+  sendSuccess(res, await findSemester(semester._id), `Semester created: ${day(semester.startDate)} to ${day(semester.endDate)} (from ${source})`, 201);
 });
 
 export const updateSemester = asyncHandler(async (req, res) => {
@@ -97,7 +126,11 @@ export const updateSemester = asyncHandler(async (req, res) => {
     semester.endDate = endDate;
     semester.endDateManual = true;
   } else if (startDate || durationWeeks !== undefined) {
-    semester.endDate = computeEndDate(semester.startDate, semester.durationWeeks);
+    // A new start date alone follows the calendar (its "semester ends"); a new duration is the HOD's decision and wins.
+    const fromCalendar = startDate && durationWeeks === undefined
+      ? endFromCalendar({ events: await calendarEvents(semester.department._id), start: semester.startDate, departmentId: semester.department._id })
+      : null;
+    semester.endDate = fromCalendar?.endDate || computeEndDate(semester.startDate, semester.durationWeeks);
     semester.endDateManual = false;
   }
   await semester.save(); // model re-checks end date > start date on the merged values
@@ -338,7 +371,7 @@ export const semesterRoster = asyncHandler(async (req, res) => {
   const semester = await findSemester(req.params.id);
   assertDepartmentAccess(req.user, semester.department._id);
 
-  const profiles = await StudentProfile.find({ semester: semester._id }).populate('user', 'name email phone isActive').sort({ rollNumber: 1 }).lean();
+  const profiles = await StudentProfile.find({ semester: semester._id }).populate('user', 'name email phone isActive hasPhoto photoUpdatedAt').sort({ rollNumber: 1 }).lean();
   const enrolments = await CourseEnrollment.aggregate([
     { $match: { semester: semester._id, student: { $in: profiles.map((p) => p.user?._id).filter(Boolean) }, status: 'enrolled' } },
     { $group: { _id: '$student', courses: { $sum: 1 }, since: { $min: '$enrolledAt' } } },
@@ -358,6 +391,8 @@ export const semesterRoster = asyncHandler(async (req, res) => {
         name: p.user?.name,
         email: p.user?.email,
         phone: p.user?.phone || '',
+        hasPhoto: !!p.user?.hasPhoto,
+        photoUpdatedAt: p.user?.photoUpdatedAt || null,
         rollNumber: p.rollNumber,
         section: p.section,
         admissionYear: p.admissionYear || null,

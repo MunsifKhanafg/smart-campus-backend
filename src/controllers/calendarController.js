@@ -5,6 +5,7 @@ import StudentProfile from '../models/StudentProfile.js';
 import { ApiError, asyncHandler, sendSuccess } from '../utils/apiHelpers.js';
 import { logAudit } from '../utils/audit.js';
 import { ROLES, DEPARTMENT_STATUS } from '../config/constants.js';
+import { pickSemesterDates, startYearOf } from '../services/semesterDates.js';
 
 const populateEvent = (q) => q.populate('department', 'name code').populate('semester', 'name academicYear');
 
@@ -59,6 +60,19 @@ export const createEvent = asyncHandler(async (req, res) => {
   });
   logAudit(req, 'calendar.create', 'AcademicCalendar', event._id, { title: event.title, type: event.type });
   sendSuccess(res, await populateEvent(AcademicCalendar.findById(event._id)), 'Event added', 201);
+});
+
+// For the new-semester form of an HOD: the start and end dates the academic calendar gives to this semester number in this academic year.
+// Odd semesters follow the first term of the year, even semesters the second. The HOD can still change the dates by hand.
+export const semesterDates = asyncHandler(async (req, res) => {
+  const startYear = startYearOf(req.query.academicYear);
+  const number = Number(req.query.number);
+  if (!startYear || !Number.isInteger(number) || number < 1) throw ApiError.badRequest('Enter the semester number and the academic year first');
+  const events = await AcademicCalendar.find({
+    type: { $in: ['semester_start', 'semester_end'] },
+    $or: [{ department: null }, { department: req.user.department }],
+  }).select('type title startDate endDate department').lean();
+  sendSuccess(res, pickSemesterDates({ events, number, startYear, departmentId: req.user.department }));
 });
 
 // An HOD can only change events of their own department. University-wide events belong to the head.

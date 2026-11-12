@@ -19,7 +19,7 @@ const rulesView = (r) => ({
 });
 
 const requireStaff = (user) => {
-  if (!STAFF_ROLES.includes(user.role)) throw ApiError.forbidden('Only teachers and HODs mark their own attendance');
+  if (!STAFF_ROLES.includes(user.role)) throw ApiError.forbidden('Only teachers, HODs and the finance officer mark their own attendance');
 };
 const today = async () => {
   const rules = await StaffAttendanceRules.getRules();
@@ -219,10 +219,11 @@ export const requestLeave = asyncHandler(async (req, res) => {
   if (overlap) throw ApiError.conflict(`You already have a ${overlap.status} leave from ${overlap.fromDate} to ${overlap.toDate}`);
 
   const leave = await StaffLeave.create({ user: req.user._id, department: req.user.department || null, fromDate, toDate, type, reason });
-  // A teacher's request goes to the HOD of the department and the principal; an HOD's request goes to the principal.
+  // A teacher's request goes to the HOD of the department and the principal. The request of an HOD or of the finance officer
+  // (who belongs to no department) goes to the principal.
   const reviewers = await User.find({
     isActive: true,
-    $or: req.user.role === ROLES.HOD ? [{ role: ROLES.UNIVERSITY_HEAD }] : [{ role: ROLES.UNIVERSITY_HEAD }, { role: ROLES.HOD, department: req.user.department }],
+    $or: req.user.role === ROLES.TEACHER ? [{ role: ROLES.UNIVERSITY_HEAD }, { role: ROLES.HOD, department: req.user.department }] : [{ role: ROLES.UNIVERSITY_HEAD }],
   }).distinct('_id');
   await notifyUsers(reviewers, { title: 'Leave request', message: `${req.user.name} asks for leave from ${fromDate} to ${toDate}: ${reason}`, type: 'attendance', link: '/staff-attendance' });
   logAudit(req, 'staff_leave.request', 'StaffLeave', leave._id, { fromDate, toDate });

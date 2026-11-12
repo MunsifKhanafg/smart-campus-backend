@@ -1,8 +1,9 @@
 import mongoose from 'mongoose';
 
-// Class IV (support) staff of a department: naib qasid / peon, sweeper, chowkidar, mali, driver, lab attendant ...
+// Class IV (support) staff: naib qasid / peon, sweeper, chowkidar, mali, driver, lab attendant ...
 // They are a DIRECTORY, not user accounts: they do not sign in, so there is no password and no role to manage.
-// Each one belongs to one department. The HOD keeps the list of their department, the principal sees every department.
+// Each one works in ONE place: a department (the HOD keeps that list) or an office that belongs to no department
+// (main college, principal's office, controller office, finance office ... only the principal keeps those).
 
 export const STAFF_SHIFTS = ['morning', 'evening', 'full_day'];
 export const STAFF_STATUS = ['active', 'on_leave', 'inactive'];
@@ -15,7 +16,8 @@ export const CLASS_IV_DESIGNATIONS = [
 
 const supportStaffSchema = new mongoose.Schema(
   {
-    department: { type: mongoose.Schema.Types.ObjectId, ref: 'Department', required: true, index: true },
+    department: { type: mongoose.Schema.Types.ObjectId, ref: 'Department', default: null, index: true },
+    office: { type: String, trim: true, maxlength: 80, default: '', index: true }, // used when there is no department
     name: { type: String, required: true, trim: true, maxlength: 100 },
     fatherName: { type: String, trim: true, maxlength: 100, default: '' },
     designation: { type: String, required: true, trim: true, maxlength: 60 },
@@ -41,6 +43,14 @@ const supportStaffSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// One place only: a department OR an office.
+supportStaffSchema.pre('validate', function (next) {
+  if (!this.department && !this.office) return next(new Error('Choose a department or an office for this staff member'));
+  if (this.department && this.office) return next(new Error('A staff member works in a department or in an office, not both'));
+  next();
+});
+
 supportStaffSchema.index({ department: 1, name: 1 });
+supportStaffSchema.index({ office: 1, name: 1 });
 
 export default mongoose.model('SupportStaff', supportStaffSchema);

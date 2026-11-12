@@ -25,7 +25,7 @@ export const setTeachingDays = asyncHandler(async (req, res) => {
 // over the real teaching days that are left. Holidays, examinations and vacations never receive a topic.
 export const autoSchedule = asyncHandler(async (req, res) => {
   const course = await getCourseFor(req.user, req.params.courseId, 'write');
-  const result = await scheduleCourseTopics(course, { titles: req.body.titles || [], userId: req.user._id });
+  const result = await scheduleCourseTopics(course, { titles: req.body.titles || [], userId: req.user._id, replace: !!req.body.replace });
   logAudit(req, 'topic.auto_schedule', 'Course', course._id, { scheduled: result.scheduled, created: result.created });
   sendSuccess(
     res,

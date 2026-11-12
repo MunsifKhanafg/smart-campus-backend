@@ -24,12 +24,14 @@ export const formatCnic = (raw) => {
   return d.length === 13 ? `${d.slice(0, 5)}-${d.slice(5, 12)}-${d.slice(12)}` : String(raw || '').trim();
 };
 
-// The principal chooses the department; an HOD's staff always go to their own department (the server ignores what the HOD sends).
-export const createStaffSchema = z.object({ ...fields, department: objectId.optional() });
-export const updateStaffSchema = z.object(fields).partial(); // the department never changes: delete and add again if someone moves
+// The principal chooses a department OR an office (main college, controller office ...). An HOD's staff always go to their own
+// department (the server ignores what the HOD sends). The place never changes afterwards: delete and add again if someone moves.
+export const createStaffSchema = z.object({ ...fields, department: objectId.optional(), office: optionalText(80) });
+export const updateStaffSchema = z.object(fields).partial();
 
 export const listStaffQuery = z.object({
   department: objectId.optional(),
+  office: z.string().trim().max(80).optional(),
   status: z.enum(STAFF_STATUS).optional(),
   search: z.string().trim().max(100).optional(),
 });

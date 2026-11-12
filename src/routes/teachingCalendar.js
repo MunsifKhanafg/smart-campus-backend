@@ -17,7 +17,7 @@ teachingCalendarRouter.post(
   '/course/:courseId/schedule',
   authorize(TEACHER),
   courseParam,
-  validate(z.object({ titles: z.array(z.string().trim().min(2).max(200)).max(80).optional() })),
+  validate(z.object({ titles: z.array(z.string().trim().min(2).max(200)).max(300).optional(), replace: z.boolean().optional() })),
   autoSchedule
 );
 // "Regenerate Schedule": a new arrangement of every topic that is still ahead (taught and hand-dated topics stay).

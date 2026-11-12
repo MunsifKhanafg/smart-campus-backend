@@ -9,16 +9,19 @@ const date = z.coerce.date();
 // (services/semesterDates.js) and calculates it again whenever either of them changes. Typing an end date makes it manual.
 const durationWeeks = z.number().int().min(1).max(52);
 
+// The start date can be left out too: the server then takes the next semester from the ACADEMIC CALENDAR
+// (services/semesterFromCalendar.js): its start, and its end (the calendar's "semester ends" or the end of the finals).
 export const createSemesterSchema = z
   .object({
     name: z.string().trim().min(2).max(100),
     number: z.number().int().min(1).max(12),
     academicYear: z.string().regex(/^\d{4}-\d{4}$/, 'Use format 2025-2026'),
-    startDate: date,
+    startDate: date.optional(),
     durationWeeks: durationWeeks.optional(),
     endDate: date.optional(),
   })
-  .refine((v) => !v.endDate || v.endDate > v.startDate, { message: 'End date must be after the start date', path: ['endDate'] });
+  .refine((v) => !v.endDate || !v.startDate || v.endDate > v.startDate, { message: 'End date must be after the start date', path: ['endDate'] })
+  .refine((v) => !v.endDate || v.startDate, { message: 'Give the start date too, or leave both empty to use the academic calendar', path: ['startDate'] });
 
 export const updateSemesterSchema = z.object({
   name: z.string().trim().min(2).max(100).optional(),

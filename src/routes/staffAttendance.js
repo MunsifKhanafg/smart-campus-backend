@@ -8,7 +8,7 @@ import {
   requestLeave, listLeaves, reviewLeave, cancelLeave,
 } from '../controllers/staffAttendanceController.js';
 
-const { UNIVERSITY_HEAD, HOD, TEACHER } = ROLES;
+const { UNIVERSITY_HEAD, HOD, TEACHER, FINANCE_OFFICER } = ROLES;
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use the format YYYY-MM-DD');
 const time = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use the format HH:MM (24 hours)');
 const idParam = validate(z.object({ id: objectId }), 'params');
@@ -56,20 +56,20 @@ export const staffAttendanceRouter = Router();
 staffAttendanceRouter.use(protect);
 
 // The college's rules: everyone who works here may read them, only the principal changes them.
-staffAttendanceRouter.get('/rules', authorize(UNIVERSITY_HEAD, HOD, TEACHER), getRules);
+staffAttendanceRouter.get('/rules', authorize(UNIVERSITY_HEAD, HOD, TEACHER, FINANCE_OFFICER), getRules);
 staffAttendanceRouter.put('/rules', authorize(UNIVERSITY_HEAD), validate(rulesSchema), updateRules);
 
-// A teacher's / HOD's own day.
-staffAttendanceRouter.get('/today', authorize(HOD, TEACHER), myToday);
-staffAttendanceRouter.post('/check-in', authorize(HOD, TEACHER), validate(checkInSchema), checkIn);
-staffAttendanceRouter.post('/check-out', authorize(HOD, TEACHER), checkOut);
-staffAttendanceRouter.get('/mine', authorize(HOD, TEACHER), validate(monthQuery, 'query'), myMonth);
+// A teacher's / HOD's / finance officer's own day.
+staffAttendanceRouter.get('/today', authorize(HOD, TEACHER, FINANCE_OFFICER), myToday);
+staffAttendanceRouter.post('/check-in', authorize(HOD, TEACHER, FINANCE_OFFICER), validate(checkInSchema), checkIn);
+staffAttendanceRouter.post('/check-out', authorize(HOD, TEACHER, FINANCE_OFFICER), checkOut);
+staffAttendanceRouter.get('/mine', authorize(HOD, TEACHER, FINANCE_OFFICER), validate(monthQuery, 'query'), myMonth);
 
-// Leave requests.
-staffAttendanceRouter.get('/leaves', authorize(UNIVERSITY_HEAD, HOD, TEACHER), validate(monthQuery, 'query'), listLeaves);
-staffAttendanceRouter.post('/leaves', authorize(HOD, TEACHER), validate(leaveSchema), requestLeave);
+// Leave requests. The finance officer's and the HODs' requests are decided by the principal; a teacher's by the HOD or the principal.
+staffAttendanceRouter.get('/leaves', authorize(UNIVERSITY_HEAD, HOD, TEACHER, FINANCE_OFFICER), validate(monthQuery, 'query'), listLeaves);
+staffAttendanceRouter.post('/leaves', authorize(HOD, TEACHER, FINANCE_OFFICER), validate(leaveSchema), requestLeave);
 staffAttendanceRouter.patch('/leaves/:id/review', authorize(UNIVERSITY_HEAD, HOD), idParam, validate(reviewSchema), reviewLeave);
-staffAttendanceRouter.delete('/leaves/:id', authorize(HOD, TEACHER), idParam, cancelLeave);
+staffAttendanceRouter.delete('/leaves/:id', authorize(HOD, TEACHER, FINANCE_OFFICER), idParam, cancelLeave);
 
 // The principal / the HOD: who is here today, the month, corrections.
 staffAttendanceRouter.get('/overview', authorize(UNIVERSITY_HEAD, HOD), validate(monthQuery, 'query'), overview);

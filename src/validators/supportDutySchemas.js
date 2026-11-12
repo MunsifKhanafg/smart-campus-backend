@@ -28,6 +28,7 @@ export const updateDutySchema = z
 
 export const listDutiesQuery = z.object({
   department: objectId.optional(),
+  office: z.string().trim().max(80).optional(), // an office name, or "__offices__" for all offices (the principal only)
   staff: objectId.optional(),
   status: z.enum(DUTY_STATUS).optional(),
   date: day.optional(),

@@ -7,6 +7,7 @@ import { logAudit } from '../utils/audit.js';
 import { notifyUsers } from '../utils/notify.js';
 import { round2 } from '../utils/oid.js';
 import { getCourseFor, enrolledStudentIds } from '../services/accessService.js';
+import { rearrangeForAssessment } from '../services/teachingCalendarService.js';
 import {
   quizPhase,
   quizWindow,
@@ -53,17 +54,20 @@ export const createQuiz = asyncHandler(async (req, res) => {
     });
   }
   logAudit(req, 'quiz.create', 'Quiz', quiz._id, { type: quiz.type, course: course.code });
-  sendSuccess(res, staffShape(quiz), 'Quiz created', 201);
+  // A scheduled quiz takes its day: topics planned on that day move to the next teaching days.
+  const moved = isSurprise ? 0 : await rearrangeForAssessment(course._id, `the quiz "${quiz.title}"`);
+  sendSuccess(res, { ...staffShape(quiz), topicsMoved: moved }, moved ? `Quiz created. ${moved} topic(s) were moved because that day is now a quiz day` : 'Quiz created', 201);
 });
 
 export const updateQuiz = asyncHandler(async (req, res) => {
   const quiz = await loadQuiz(req.params.id);
-  await getCourseFor(req.user, quiz.course, 'write');
+  const course = await getCourseFor(req.user, quiz.course, 'write');
   if (quiz.status === QUIZ_STATUS.LIVE || quiz.status === QUIZ_STATUS.CLOSED) throw ApiError.badRequest('A running or closed quiz cannot be edited');
   if (await QuizAttempt.exists({ quiz: quiz._id })) throw ApiError.conflict('Students have already attempted this quiz');
   quiz.set(req.body);
   await quiz.save();
-  sendSuccess(res, staffShape(quiz), 'Quiz updated');
+  const moved = req.body.startTime ? await rearrangeForAssessment(course._id, `the quiz "${quiz.title}"`) : 0;
+  sendSuccess(res, { ...staffShape(quiz), topicsMoved: moved }, moved ? `Quiz updated. ${moved} topic(s) were moved because of the new quiz day` : 'Quiz updated');
 });
 
 export const deleteQuiz = asyncHandler(async (req, res) => {
@@ -71,6 +75,7 @@ export const deleteQuiz = asyncHandler(async (req, res) => {
   await getCourseFor(req.user, quiz.course, 'write');
   if (await QuizAttempt.exists({ quiz: quiz._id })) throw ApiError.conflict('Students have already attempted this quiz and it cannot be deleted');
   await quiz.deleteOne();
+  await rearrangeForAssessment(quiz.course, `the removed quiz "${quiz.title}"`);
   sendSuccess(res, null, 'Quiz deleted');
 });
 
@@ -92,7 +97,9 @@ export const startSurprise = asyncHandler(async (req, res) => {
     link: `/my-courses/${course._id}`,
   });
   logAudit(req, 'quiz.start_surprise', 'Quiz', quiz._id, { course: course.code });
-  sendSuccess(res, staffShape(quiz), 'Surprise quiz started');
+  // Today becomes a quiz day: today's topics move to the next teaching day.
+  const moved = await rearrangeForAssessment(course._id, `the surprise quiz "${quiz.title}"`);
+  sendSuccess(res, { ...staffShape(quiz), topicsMoved: moved }, moved ? `Surprise quiz started. ${moved} topic(s) were moved to the next teaching days` : 'Surprise quiz started');
 });
 
 // Ends the quiz now. Every unfinished attempt is marked with the answers saved so far.
