@@ -22,15 +22,15 @@ const libraryRulesSchema = new mongoose.Schema(
     lostProcessingFee: { type: Number, default: 0, min: 0 },
 
     // ----- automatic SMS and in-app reminders -----
-    smsEnabled: { type: Boolean, default: true }, // false = only in-app notifications (the SMS provider itself is set in server/.env)
+    smsEnabled: { type: Boolean, default: false }, // no longer used: the library only sends in-app notifications (kept so old saved rules still load)
     reminderBeforeDays: { type: [Number], default: [3, 1] }, // days before the due day on which a reminder is sent
     remindOnDueDay: { type: Boolean, default: true },
     overdueReminderEveryDays: { type: Number, default: 2, min: 1, max: 30 }, // repeat interval after the due day
     maxOverdueReminders: { type: Number, default: 10, min: 0, max: 100 }, // 0 = keep reminding until the book is returned
 
     // ----- complaints (to the student's department) -----
-    complaintAfterOverdueDays: { type: Number, default: 7, min: 1, max: 365 }, // a complaint is filed this many days after the due day
-    principalAfterOverdueDays: { type: Number, default: 30, min: 1, max: 730 }, // the principal is informed after this many days
+    complaintAfterOverdueDays: { type: Number, default: 2, min: 1, max: 365 }, // the student's department (HOD) is told (in-app) this many days after the due day
+    principalAfterOverdueDays: { type: Number, default: 30, min: 1, max: 730 }, // no longer used: the principal gets no library notifications (kept so old saved rules still load)
 
     // ----- reservations -----
     reservationHoldDays: { type: Number, default: 2, min: 1, max: 30 }, // how long a returned copy waits for the student who reserved it
@@ -53,6 +53,11 @@ libraryRulesSchema.statics.getRules = async function () {
       if (err.code !== 11000) throw err; // two requests created it at the same time: read the winner
       doc = await this.findOne({ key: 'global' });
     }
+  }
+  // One-time move from the older defaults (7 or 3 days) to the 2-day department notification. Rules that somebody saved on purpose (updatedBy is set) are never touched.
+  if (doc && [3, 7].includes(doc.complaintAfterOverdueDays) && !doc.updatedBy) {
+    await this.updateOne({ _id: doc._id, complaintAfterOverdueDays: doc.complaintAfterOverdueDays, updatedBy: { $exists: false } }, { complaintAfterOverdueDays: 2 });
+    doc.complaintAfterOverdueDays = 2;
   }
   return doc;
 };

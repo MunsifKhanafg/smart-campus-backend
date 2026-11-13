@@ -9,16 +9,15 @@ import Complaint from '../models/Complaint.js';
 import User from '../models/User.js';
 import StudentProfile from '../models/StudentProfile.js';
 import { ApiError, asyncHandler, sendSuccess } from '../utils/apiHelpers.js';
-import { smsEnabled } from '../services/smsService.js';
 import * as lib from '../services/libraryService.js';
 import { codeFromScan, normalizeCode, pageParams, escapeRegex } from '../services/libraryRules.js';
 import { buildReport, sendReport } from '../services/libraryReportService.js';
 import { ROLES, LOAN_STATUS as LS, BOOK_COPY_STATUS as CS, RESERVATION_STATUS as RS } from '../config/constants.js';
 
 // The library API. Who may call what is decided in routes/library.js:
-//   library controller : everything (the desk, the catalogue, rules, reports)
-//   principal          : the same screens read-only (monitoring), plus the library rules
-//   student            : the catalogue and their OWN books, fines, reservations and messages (always from the login, never from the request)
+//   library controller : everything (the desk, the catalogue, rules, reports). The ONLY staff role with library access.
+//   student            : read-only: the catalogue, their OWN issued books, return dates, overdue books and library notifications
+//                        (always from the login, never from the request). Students cannot borrow, reserve, renew or return online.
 const paged = (items, total, page, limit) => ({ items, total, page, pages: Math.max(1, Math.ceil(total / limit)) });
 const isStudent = (u) => u.role === ROLES.STUDENT;
 
@@ -32,7 +31,7 @@ export const dashboard = asyncHandler(async (req, res) => {
 });
 
 export const getRules = asyncHandler(async (_req, res) => {
-  sendSuccess(res, { ...lib.rulesView(await LibraryRules.getRules()), providerConfigured: smsEnabled(), currency: await lib.getCurrency() });
+  sendSuccess(res, { ...lib.rulesView(await LibraryRules.getRules()), currency: await lib.getCurrency() });
 });
 
 export const saveRules = asyncHandler(async (req, res) => {
@@ -42,7 +41,7 @@ export const saveRules = asyncHandler(async (req, res) => {
   rules.set({ ...body, updatedBy: req.user._id });
   await rules.save();
   lib.libLog(req.user, 'rules.update', 'LibraryRules', rules._id, { fields: Object.keys(req.body) }, req.ip);
-  sendSuccess(res, { ...lib.rulesView(rules), providerConfigured: smsEnabled(), currency: await lib.getCurrency() }, 'Library rules saved');
+  sendSuccess(res, { ...lib.rulesView(rules), currency: await lib.getCurrency() }, 'Library rules saved');
 });
 
 export const categories = asyncHandler(async (_req, res) => {
@@ -255,6 +254,12 @@ export const listReservations = asyncHandler(async (req, res) => {
   sendSuccess(res, paged(rows.map((r) => ({ _id: r._id, book: r.book, student: r.student?.name, rollNumber: r.rollNumber, status: r.status, createdAt: r.createdAt, holdUntilDay: r.holdUntilDay || null, note: r.note })), total, page, limit));
 });
 
+// Written down by the library controller at the desk for a student who asks for a book whose copies are all out.
+export const deskReserve = asyncHandler(async (req, res) => {
+  const r = await lib.deskReserveBook({ student: normalizeCode(req.body.student), code: codeFromScan(req.body.code), actor: req.user, ip: req.ip });
+  sendSuccess(res, { position: r.position, reservationId: r.reservation._id, book: r.book.title, student: r.student }, `"${r.book.title}" reserved for ${r.student.name}. Number ${r.position} in the waiting list`, 201);
+});
+
 export const cancelReservation = asyncHandler(async (req, res) => {
   await lib.cancelReservation({ id: req.params.id, actor: req.user });
   sendSuccess(res, null, 'Reservation cancelled');
@@ -273,7 +278,7 @@ export const listMessages = asyncHandler(async (req, res) => {
   const rolls = new Map((await StudentProfile.find({ user: { $in: rows.map((m) => m.student?._id) } }).select('user rollNumber').lean()).map((p) => [String(p.user), p.rollNumber]));
   sendSuccess(res, {
     ...paged(rows.map((m) => ({ _id: m._id, student: m.student?.name, rollNumber: rolls.get(String(m.student?._id)) || '', kind: m.kind, status: m.status, text: m.text, at: m.createdAt })), total, page, limit),
-    counts: Object.fromEntries(counts.map((c) => [c._id, c.n])), smsConfigured: smsEnabled(),
+    counts: Object.fromEntries(counts.map((c) => [c._id, c.n])),
   });
 });
 
@@ -302,6 +307,11 @@ export const listLibraryComplaints = asyncHandler(async (req, res) => {
   })));
 });
 
+// The HOD: overdue library books of the HOD's own department only (the department comes from the login, not from the request).
+export const departmentOverdue = asyncHandler(async (req, res) => {
+  sendSuccess(res, await lib.departmentOverdue(req.user));
+});
+
 export const runJobsNow = asyncHandler(async (req, res) => {
   const r = await lib.runLibraryJobs({ force: true });
   lib.libLog(req.user, 'jobs.run', 'Library', null, r, req.ip);
@@ -326,17 +336,4 @@ export const myMessages = asyncHandler(async (req, res) => {
   sendSuccess(res, rows.map((m) => ({ _id: m._id, kind: m.kind, text: m.text, sms: m.status, at: m.createdAt })));
 });
 
-export const myReserve = asyncHandler(async (req, res) => {
-  const r = await lib.reserveBook({ bookId: req.body.book, user: req.user });
-  sendSuccess(res, { position: r.position, reservationId: r.reservation._id }, `"${r.book.title}" reserved. You are number ${r.position} in the waiting list`, 201);
-});
-
-export const myCancelReservation = asyncHandler(async (req, res) => {
-  await lib.cancelReservation({ id: req.params.id, actor: req.user, isStudent: true });
-  sendSuccess(res, null, 'Reservation cancelled');
-});
-
-export const myRenew = asyncHandler(async (req, res) => {
-  const loan = await lib.renewLoan({ loanId: req.params.id, actor: req.user, isStudent: true, ip: req.ip });
-  sendSuccess(res, { dueDay: loan.dueDay, renewals: loan.renewals }, `Renewed. The new return date is ${loan.dueDay}`);
-});
+// Students cannot reserve, renew or return books online: those actions happen only at the Library Office, recorded by the library controller.

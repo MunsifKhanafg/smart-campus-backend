@@ -72,6 +72,11 @@ export const paymentSchema = z.object({
   note: text(300).default(''),
 });
 export const lookupQuery = z.object({ code: z.string().trim().min(1).max(200) });
+// A reservation is written down by the library controller at the Library Office for a student who asks for a book whose copies are all out.
+export const deskReserveSchema = z.object({
+  student: z.string().trim().min(1, 'Enter or scan the student ID').max(40),
+  code: z.string().trim().min(2, 'Scan or type the Book ID, ISBN or a copy code').max(120),
+});
 
 // ---------- Lists ----------
 export const loansQuery = z.object({

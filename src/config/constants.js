@@ -115,6 +115,8 @@ export const BOOK_COPY_STATUS = Object.freeze({
 });
 export const LOAN_STATUS = Object.freeze({ ISSUED: 'issued', RETURNED: 'returned', LOST: 'lost' });
 export const RESERVATION_STATUS = Object.freeze({ WAITING: 'waiting', READY: 'ready', FULFILLED: 'fulfilled', CANCELLED: 'cancelled', EXPIRED: 'expired' });
+// A student's "Request book" (a book that is available now): pending -> approved (a copy is held at the desk) -> collected (issued), or rejected / cancelled / expired.
+export const REQUEST_STATUS = Object.freeze({ PENDING: 'pending', APPROVED: 'approved', COLLECTED: 'collected', REJECTED: 'rejected', CANCELLED: 'cancelled', EXPIRED: 'expired' });
 
 // ---------- New student admission applications (public portal) ----------
 export const APPLICATION_STATUS = Object.freeze({

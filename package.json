@@ -9,6 +9,7 @@
     "dev": "nodemon src/server.js",
     "seed": "node src/seed/seed.js",
     "seed:demo": "node src/seed/seedDemo.js",
+    "seed:library": "node src/seed/seedLibrary.js",
     "test": "node --test"
   },
   "dependencies": {

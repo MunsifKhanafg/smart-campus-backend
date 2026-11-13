@@ -16,7 +16,6 @@ import Department from '../models/Department.js';
 import User from '../models/User.js';
 import { ApiError } from '../utils/apiHelpers.js';
 import { notifyUsers } from '../utils/notify.js';
-import { smsToUser } from './smsService.js';
 import { localNow, addDays } from './staffAttendanceRules.js';
 import {
   diffDays, dueDayFrom, calcFine, loanBalance, lostPenalty, reminderDecision, escalationStage, makeCopyCode, makeBookId, normalizeCode, smsText, escapeRegex, maskPhone,
@@ -63,6 +62,12 @@ export const libLog = (actor, action, entity, entityId, meta = {}, ip = '') =>
 
 const controllerIds = () => User.find({ role: ROLES.LIBRARY_CONTROLLER, isActive: true }).distinct('_id');
 const principalIds = () => User.find({ role: ROLES.UNIVERSITY_HEAD, isActive: true }).distinct('_id');
+// The people to tell about a student's department: its HOD, or (when no HOD is assigned) any active HOD account of that department.
+const hodIdsOf = async (dept) => {
+  if (!dept) return [];
+  if (dept.hod) return [dept.hod];
+  return User.find({ role: ROLES.HOD, department: dept._id, isActive: true }).distinct('_id');
+};
 
 // ---------------------------------------------------------------------------------------------------------------------------
 // Messages to the student: in-app notification + SMS, logged, and sent only once per (loan, kind, key)
@@ -385,6 +390,11 @@ const closeLibraryComplaints = async (loan, text) => {
     c.resolution = text;
     c.resolvedAt = new Date();
     await c.save();
+    // The HOD was told the book was not returned, so the HOD is told when it finally comes back (only the HOD of that student's department).
+    if (c.recipient === 'hod' && c.department) {
+      const dept = await Department.findById(c.department).select('hod');
+      await notifyUsers(await hodIdsOf(dept), { title: 'Library: overdue book returned', message: `${loan.rollNumber} returned the overdue book. ${text} (${c.subject})`, type: 'library', link: '/complaints' });
+    }
   }
 };
 
@@ -450,10 +460,7 @@ export const markLost = async ({ loanId, amount, note = '', actor, ip = '' }) =>
   const bal = loanBalance({ fineAccrued: done.fine.accrued, penalties: done.penalties, payments: done.payments });
   const currency = await getCurrency();
   await sendLibraryMessage({ loan: done, student: loan.student, kind: 'lost', text: smsText.lost({ title: book?.title, pending: bal.pending, currency }) });
-  await fileComplaint(done, 'lost');
-  await notifyUsers(await principalIds(), {
-    title: 'Library: a book was lost', message: `${loan.rollNumber} lost "${book?.title}". Amount charged: ${currency} ${bal.charged}.`, type: 'library', link: '/library',
-  });
+  await fileComplaint(done, 'lost'); // the student's department is told; the principal gets no library notices
   libLog(actor, 'lost', 'LibraryLoan', loan._id, { book: book?.title, roll: loan.rollNumber, charged: bal.charged }, ip);
   return { loan: done, charged: bal.charged };
 };
@@ -503,6 +510,34 @@ export const reserveBook = async ({ bookId, user }) => {
   const position = await LibraryReservation.countDocuments({ book: book._id, status: RS.WAITING, createdAt: { $lte: r.createdAt } });
   libLog(user, 'reserve', 'LibraryReservation', r._id, { book: book.title, roll: profile.rollNumber, position });
   return { reservation: r, position, book };
+};
+
+// The library controller writes a reservation down at the desk for a student who asks for a book whose copies are all out.
+// The code can be a copy code, the Book ID or the ISBN. The same rules as for any reservation apply.
+export const deskReserveBook = async ({ student: ident, code, actor, ip = '' }) => {
+  const rules = await LibraryRules.getRules();
+  const { profile, user } = await findStudent(ident);
+  if (!user.isActive || profile.status !== 'active') throw ApiError.forbidden(`This student is ${user.isActive ? profile.status : 'inactive'}. A book cannot be reserved`);
+  const c = normalizeCode(code);
+  if (!c) throw ApiError.badRequest('Scan or type the Book ID, ISBN or a copy code');
+  const copy = await BookCopy.findOne({ code: c }).select('book');
+  const book = copy ? await Book.findOne({ _id: copy.book, status: 'active' }) : await Book.findOne({ $or: [{ bookId: c }, { isbn: c }], status: 'active' });
+  if (!book) throw ApiError.notFound(`No book in the library matches "${c}"`);
+  if (book.copiesAvailable > 0) throw ApiError.conflict('A copy of this book is available now. Issue it to the student instead of reserving it');
+  if (!book.copiesTotal) throw ApiError.conflict('This book has no copies in the library');
+  if (await LibraryLoan.exists({ student: user._id, book: book._id, status: LS.ISSUED })) throw ApiError.conflict('This student already has this book');
+  const openCount = await LibraryReservation.countDocuments({ student: user._id, status: { $in: [RS.WAITING, RS.READY] } });
+  if (openCount >= rules.maxReservationsPerStudent) throw ApiError.conflict(`This student can reserve at most ${rules.maxReservationsPerStudent} books at a time`);
+  let r;
+  try {
+    r = await LibraryReservation.create({ book: book._id, student: user._id, rollNumber: profile.rollNumber });
+  } catch (err) {
+    if (err.code === 11000) throw ApiError.conflict('This student is already in the waiting list for this book');
+    throw err;
+  }
+  const position = await LibraryReservation.countDocuments({ book: book._id, status: RS.WAITING, createdAt: { $lte: r.createdAt } });
+  libLog(actor, 'reserve', 'LibraryReservation', r._id, { book: book.title, roll: profile.rollNumber, position, atDesk: true }, ip);
+  return { reservation: r, position, book, student: { name: user.name, rollNumber: profile.rollNumber } };
 };
 
 // A copy became free: the first student waiting for the title gets it (held at the desk).
@@ -574,12 +609,13 @@ export const fileComplaint = async (loanDoc, kind) => {
   if (!loan) return null;
   try {
     const today = await libraryToday();
-    const [book, copy, user, profile, currency] = await Promise.all([
+    const [book, copy, user, profile, currency, controller] = await Promise.all([
       Book.findById(loan.book).select('title authors bookId'),
       BookCopy.findById(loan.copy).select('code'),
       User.findById(loan.student).select('name phone email'),
       StudentProfile.findOne({ user: loan.student }).populate('department', 'name code hod').populate('semester', 'name'),
       getCurrency(),
+      loan.issuedBy ? User.findById(loan.issuedBy).select('name email phone') : null,
     ]);
     const s = loanState(loan, today);
     const dept = profile?.department;
@@ -592,6 +628,7 @@ export const fileComplaint = async (loanDoc, kind) => {
       '',
       `Book: "${book?.title}" by ${authorsText(book)}`,
       `Book ID: ${book?.bookId} · Copy: ${copy?.code}`,
+      `Library controller: ${controller?.name || 'not recorded'}${controller?.email ? ` · ${controller.email}` : ''}${controller?.phone ? ` · ${controller.phone}` : ''}`,
       `Issued on: ${loan.issuedDay} · Return deadline: ${loan.dueDay}`,
       kind === 'lost' ? `The student reported the book as LOST on ${loan.returnedDay}.` : `The book is ${s.overdueDays} day(s) overdue.`,
       `Charges so far: ${currency} ${s.charged} (late fine ${currency} ${s.fine}${s.penalty ? `, lost / damaged charge ${currency} ${s.penalty}` : ''}).`,
@@ -610,10 +647,13 @@ export const fileComplaint = async (loanDoc, kind) => {
       libraryLoan: loan._id,
     });
     await LibraryLoan.updateOne({ _id: loan._id }, { [target]: c._id });
-    const handlers = toPrincipal ? await principalIds() : dept?.hod ? [dept.hod] : [];
+    const handlers = toPrincipal ? await principalIds() : await hodIdsOf(dept);
+    // The HOD gets everything needed to act without opening anything else: student, ID, department, book, dates, overdue days, controller.
+    const detail = `${user?.name} (${loan.rollNumber}), ${dept?.name || 'no department'}: "${book?.title}" [${book?.bookId}], issued ${loan.issuedDay}, due ${loan.dueDay}, ${s.overdueDays} day(s) overdue. Library controller: ${controller?.name || 'not recorded'}.`;
     await notifyUsers(handlers, {
       title: toPrincipal ? 'Library: a book is very late' : kind === 'lost' ? 'Library: a student lost a book' : 'Library: a student did not return a book',
-      message: `${user?.name} (${loan.rollNumber}): "${book?.title}". Open the complaint.`, type: 'complaint', link: '/complaints',
+      message: toPrincipal ? `${user?.name} (${loan.rollNumber}): "${book?.title}". Open the complaint.` : detail,
+      type: 'complaint', link: '/complaints',
     });
     libLog(null, toPrincipal ? 'complaint.principal' : 'complaint.department', 'Complaint', c._id, { roll: loan.rollNumber, book: book?.title, overdueDays: s.overdueDays, category });
     return c;
@@ -636,7 +676,7 @@ export const runLibraryJobs = async ({ force = false } = {}) => {
   if (!force && Date.now() - lastRun < 10 * 60 * 1000) return { skipped: 'ran a few minutes ago' };
   running = true;
   lastRun = Date.now();
-  const out = { expiredReservations: 0, reminders: 0, newlyOverdue: 0, complaints: 0, principalComplaints: 0, checked: 0 };
+  const out = { expiredReservations: 0, reminders: 0, newlyOverdue: 0, complaints: 0, checked: 0 };
   try {
     const [rules, today, currency] = await Promise.all([LibraryRules.getRules(), libraryToday(), getCurrency()]);
     out.expiredReservations = await expireReservations(today, rules);
@@ -667,10 +707,9 @@ export const runLibraryJobs = async ({ force = false } = {}) => {
         libLog(null, 'overdue.detected', 'LibraryLoan', loan._id, { roll: loan.rollNumber, book: title, dueDay: loan.dueDay });
       }
 
-      // 3. Complaint to the department, and later the principal.
+      // 3. Once the book is late enough (default 2 days) the student's department (HOD) is told, once. The principal is not part of the library follow-up.
       const stage = escalationStage({ overdueDays: state.overdueDays, rules });
       if (stage.department && !loan.complaintClaimed && (await fileComplaint(loan, 'overdue'))) out.complaints += 1;
-      if (stage.principal && !loan.principalClaimed && (await fileComplaint(loan, 'principal'))) out.principalComplaints += 1;
     }
     return out;
   } finally {
@@ -681,6 +720,35 @@ export const runLibraryJobs = async ({ force = false } = {}) => {
 // ---------------------------------------------------------------------------------------------------------------------------
 // Listing helpers
 // ---------------------------------------------------------------------------------------------------------------------------
+// The HOD's view: open loans of students of the HOD's OWN department that are past the due day. The department always comes from the
+// logged-in HOD (never from the request), so another department's students can never be listed.
+export const departmentOverdue = async (hod) => {
+  if (!hod.department) return { today: await libraryToday(), escalateAfterDays: null, items: [], totals: { overdue: 0, escalated: 0 } };
+  const [today, rules, currency] = await Promise.all([libraryToday(), LibraryRules.getRules(), getCurrency()]);
+  const loans = await withLoanRefs(LibraryLoan.find({ status: LS.ISSUED, department: hod.department, dueDay: { $lt: today } }))
+    .populate('issuedBy', 'name email')
+    .sort({ dueDay: 1 })
+    .limit(500)
+    .lean();
+  const complaintIds = loans.map((l) => l.complaint).filter(Boolean);
+  const complaints = await Complaint.find({ _id: { $in: complaintIds } }).select('status createdAt').lean();
+  const byId = new Map(complaints.map((c) => [String(c._id), c]));
+  const after = rules.complaintAfterOverdueDays;
+  const items = loans.map((l) => {
+    const s = loanState(l, today);
+    const esc = l.complaint ? byId.get(String(l.complaint)) : null;
+    return {
+      _id: l._id, student: l.student?.name || '', rollNumber: l.rollNumber,
+      book: l.book?.title || '', bookId: l.book?.bookId || '', copyCode: l.copy?.code || '',
+      issuedDay: l.issuedDay, dueDay: l.dueDay, overdueDays: s.overdueDays, fine: s.fine,
+      controller: l.issuedBy ? { name: l.issuedBy.name, email: l.issuedBy.email } : null,
+      escalated: !!esc, escalatedAt: esc?.createdAt || null, complaintId: esc?._id || null,
+      escalatesInDays: esc ? 0 : Math.max(0, after - s.overdueDays),
+    };
+  });
+  return { today, currency, escalateAfterDays: after, items, totals: { overdue: items.length, escalated: items.filter((i) => i.escalated).length } };
+};
+
 export const searchStudents = async ({ q, holding }) => {
   const today = await libraryToday();
   let profiles;
@@ -744,7 +812,7 @@ export const studentSummary = async (userId) => {
 // ---------------------------------------------------------------------------------------------------------------------------
 export const libraryOverview = async () => {
   const [today, currency] = await Promise.all([libraryToday(), getCurrency()]);
-  const [titles, copyRows, openLoans, closedMoney, returnedTotal, lostTotal, issuedToday, returnedToday, totalStudents, reservationRows, complaintRows, trendIssued, trendReturned] = await Promise.all([
+  const [titles, copyRows, openLoans, closedMoney, returnedTotal, lostTotal, issuedToday, returnedToday, totalStudents, reservationRows, complaintRows, trendIssued, trendReturned, studentsEver, recentIssued, recentReturned, deptComplaintRows] = await Promise.all([
     Book.countDocuments({ status: 'active' }),
     BookCopy.aggregate([{ $group: { _id: '$status', n: { $sum: 1 } } }]),
     LibraryLoan.find({ status: LS.ISSUED }).populate('student', 'name').populate('book', 'title').lean(),
@@ -766,6 +834,13 @@ export const libraryOverview = async () => {
     Complaint.aggregate([{ $match: { source: 'library' } }, { $group: { _id: '$status', n: { $sum: 1 } } }]),
     LibraryLoan.aggregate([{ $match: { issuedDay: { $gte: addDays(today, -13) } } }, { $group: { _id: '$issuedDay', n: { $sum: 1 } } }]),
     LibraryLoan.aggregate([{ $match: { returnedDay: { $gte: addDays(today, -13) }, status: LS.RETURNED } }, { $group: { _id: '$returnedDay', n: { $sum: 1 } } }]),
+    LibraryLoan.distinct('student'), // every student who has ever borrowed a book
+    withLoanRefs(LibraryLoan.find({})).sort({ issuedAt: -1 }).limit(10).lean(),
+    withLoanRefs(LibraryLoan.find({ status: LS.RETURNED, returnedAt: { $exists: true } })).sort({ returnedAt: -1 }).limit(10).lean(),
+    Complaint.aggregate([
+      { $match: { source: 'library', department: { $ne: null } } },
+      { $group: { _id: '$department', total: { $sum: 1 }, open: { $sum: { $cond: [{ $in: ['$status', ['open', 'in_review']] }, 1, 0] } } } },
+    ]),
   ]);
 
   const copies = Object.fromEntries(copyRows.map((r) => [r._id, r.n]));
@@ -778,6 +853,26 @@ export const libraryOverview = async () => {
   const comp = Object.fromEntries(complaintRows.map((r) => [r._id, r.n]));
   const tI = new Map(trendIssued.map((r) => [r._id, r.n]));
   const tR = new Map(trendReturned.map((r) => [r._id, r.n]));
+
+  // Latest desk transactions: the newest issues and the newest returns, mixed by time.
+  const recent = [
+    ...recentIssued.map((l) => ({ _id: `${l._id}-issued`, kind: 'issued', at: l.issuedAt, day: l.issuedDay, student: l.student?.name || '', rollNumber: l.rollNumber, book: l.book?.title || '', copyCode: l.copy?.code || '' })),
+    ...recentReturned.map((l) => ({ _id: `${l._id}-returned`, kind: 'returned', at: l.returnedAt, day: l.returnedDay, student: l.student?.name || '', rollNumber: l.rollNumber, book: l.book?.title || '', copyCode: l.copy?.code || '' })),
+  ].sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, 10);
+
+  // Books that are still out, the earliest return date first (so the overdue ones come first).
+  const pendingReturns = [...openLoans].sort((a, b) => a.dueDay.localeCompare(b.dueDay)).slice(0, 10).map((l) => {
+    const s = loanState(l, today);
+    return { _id: l._id, student: l.student?.name || '', rollNumber: l.rollNumber, book: l.book?.title || '', issuedDay: l.issuedDay, dueDay: l.dueDay, state: s.state, daysLeft: s.daysLeft, overdueDays: s.overdueDays };
+  });
+
+  // Library complaints per department (the departments the library had to write to).
+  const deptDocs = new Map((await Department.find({ _id: { $in: deptComplaintRows.map((r) => r._id) } }).select('name code').lean()).map((d) => [String(d._id), d]));
+  const byDepartment = deptComplaintRows
+    .map((r) => ({ department: deptDocs.get(String(r._id)) ? { name: deptDocs.get(String(r._id)).name, code: deptDocs.get(String(r._id)).code } : null, open: r.open, total: r.total }))
+    .filter((r) => r.department)
+    .sort((a, b) => b.open - a.open || b.total - a.total)
+    .slice(0, 8);
 
   const staff = await User.find({ role: ROLES.LIBRARY_CONTROLLER, isActive: true }).select('name').lean();
   const att = await StaffAttendance.find({ date: today, user: { $in: staff.map((s) => s._id) } }).select('user status checkInAt minutesLate').lean();
@@ -792,11 +887,12 @@ export const libraryOverview = async () => {
     loans: { issued: openLoans.length, overdue: overdueLoans.length, returned: returnedTotal, lost: lostTotal, issuedToday, returnedToday },
     fines: { pending: round(m.pending + liveFines), accruing: round(liveFines), collected: round(m.paid), waived: round(m.waived) },
     students: {
-      total: totalStudents, withBooks: new Set(openLoans.map((l) => String(l.student?._id))).size, withOverdue: new Set(overdueLoans.map((l) => String(l.student?._id))).size,
+      total: totalStudents, everUsed: studentsEver.length, withBooks: new Set(openLoans.map((l) => String(l.student?._id))).size, withOverdue: new Set(overdueLoans.map((l) => String(l.student?._id))).size,
     },
     reservations: { waiting: res[RS.WAITING] || 0, ready: res[RS.READY] || 0 },
-    complaints: { open: (comp.open || 0) + (comp.in_review || 0), resolved: comp.resolved || 0, total: Object.values(comp).reduce((s, n) => s + n, 0) },
+    complaints: { open: (comp.open || 0) + (comp.in_review || 0), resolved: comp.resolved || 0, total: Object.values(comp).reduce((s, n) => s + n, 0), byDepartment },
     trend: Array.from({ length: 14 }, (_, i) => { const d = addDays(today, i - 13); return { day: d, issued: tI.get(d) || 0, returned: tR.get(d) || 0 }; }),
+    recent, pendingReturns,
     mostOverdue: overdueLoans.sort((a, b) => a.dueDay.localeCompare(b.dueDay)).slice(0, 8).map((l) => ({
       _id: l._id, student: l.student?.name, rollNumber: l.rollNumber, book: l.book?.title, dueDay: l.dueDay, overdueDays: loanState(l, today).overdueDays, fine: loanState(l, today).fine,
     })),
