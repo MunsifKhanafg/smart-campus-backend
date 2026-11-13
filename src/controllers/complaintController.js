@@ -14,7 +14,7 @@ const file = (f) => ({ originalName: f.originalName, storedName: f.storedName, m
 const shape = (c, extra = {}) => ({
   _id: c._id, category: c.category, recipient: c.recipient, subject: c.subject, description: c.description, status: c.status,
   attachments: c.attachments.map(file), responses: c.responses.map((r) => ({ byRole: r.byRole, message: r.message, status: r.status, at: r.at })),
-  resolution: c.resolution, resolvedAt: c.resolvedAt, createdAt: c.createdAt, ...extra,
+  resolution: c.resolution, resolvedAt: c.resolvedAt, createdAt: c.createdAt, source: c.source || 'student', ...extra,
 });
 
 // Which office may read a complaint? Only the one it was addressed to. Teachers are never one of them.

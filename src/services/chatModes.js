@@ -1,7 +1,7 @@
 // The "menu" of the AI assistant: what a student, a teacher or a head of department can ask it to do.
 // Pure data and small functions (no database), so the rules are easy to test.
 
-export const ROLE_GROUPS = { student: 'student', teacher: 'staff', hod: 'staff', university_head: 'staff', finance_officer: 'staff' };
+export const ROLE_GROUPS = { student: 'student', teacher: 'staff', hod: 'staff', university_head: 'staff', finance_officer: 'staff', library_controller: 'staff' };
 
 const ALL = [
   { id: 'general', icon: '💬', label: 'Ask anything', hint: 'Any academic or educational question', placeholder: 'Ask a question about any subject...', who: ['student', 'staff'], extra: '' },
@@ -27,12 +27,14 @@ const ALL = [
     extra: 'Draft questions for the teacher with an answer key and a marking scheme. The teacher reviews and finalises them.' },
   { id: 'rubric', icon: '📊', label: 'Marking rubric', hint: 'Criteria and marks for an assignment', placeholder: 'Describe the assignment and total marks...', who: ['staff'],
     extra: 'Create a clear marking rubric as a table: criteria, what each level looks like, and the marks.' },
-  { id: 'records', icon: '🔎', label: 'Search records', hint: 'Find a student, teacher or course by roll number: attendance, fees, exams', placeholder: 'e.g. attendance of CS-S1-03   ·   fees of Ali Khan   ·   CS-S1-03 (shows everything about the student)', who: [], records: true,
+  { id: 'records', icon: '🔎', label: 'Search records', hint: 'Find a student, teacher or course by roll number: attendance, fees, exams', placeholder: 'e.g. attendance of CS-S1-03   ·   fees of Ali Khan   ·   total pending fees   ·   how many students in semester 3   ·   CS-S1-03 (shows everything about the student)', who: [], records: true,
     extra: 'Answer about the students, teachers and courses in the records data supplied. Show the details asked for, as short sections and tables. Never invent records and never go beyond the data supplied.' },
   { id: 'people', icon: '👥', label: 'Students & teachers', hint: 'Names and details of students, teachers and departments', placeholder: 'e.g. List all teachers with their subjects. Show students of semester 3. Details of student CS-S1-03', who: [], leader: true,
     extra: 'Answer about the students, teachers and departments in the people data supplied. Show lists as tables with the details asked for. Never invent people and never go beyond the data supplied.' },
   { id: 'campus', icon: '🏫', label: 'My courses & teachers', hint: 'Your subjects, teachers, timetable and course contents', placeholder: 'e.g. Who teaches my English class? What is in the course contents of Pakistan Studies?', who: ['student', 'staff'],
     extra: 'Answer about the user\'s own subjects, teachers, credit hours, weekly classes and course contents of this university, from the campus data supplied. Number course content items as given. You may explain an item or plan study time from it.' },
+  { id: 'library', icon: '📚', label: 'Library assistant', hint: 'Books, your borrowed books, return dates, fines and how the library works', placeholder: 'e.g. Which books are available?   ·   When is my return deadline?   ·   Do I have overdue books?', who: [], library: true,
+    extra: 'Answer library questions from the library data supplied: which books exist and are available, the books the user has borrowed, return deadlines, overdue books, fines, reservations, and how to borrow or return a book. Use only that data. Show lists as short tables or bullets and give dates and amounts exactly as they are.' },
   { id: 'course', icon: '📖', label: 'Course materials', hint: 'Answers only from one course\'s uploaded notes', placeholder: 'Ask about this course\'s materials...', who: ['student', 'staff'], extra: '' },
 ];
 
@@ -43,8 +45,11 @@ const isLeader = (role) => role === 'hod' || role === 'university_head';
 // The finance office gets only the records search; the principal and HODs get the records search and the other tools.
 // (The routes refuse other roles too; this is a second lock.)
 const ASSISTANT_ROLES = new Set(['university_head', 'hod', 'finance_officer']);
-const strip = ({ who, extra, leader, records, ...m }) => m;
+const strip = ({ who, extra, leader, records, library, ...m }) => m;
+// Students and the library controller get ONE option: the library assistant (the student's own books, fines and deadlines, and the catalogue).
+const LIBRARY_ROLES = new Set(['student', 'library_controller']);
 export const modesFor = (role) => {
+  if (LIBRARY_ROLES.has(role)) return ALL.filter((m) => m.library).map(strip);
   if (!ASSISTANT_ROLES.has(role)) return [];
   // The assistant is ONE search box: it finds a student, teacher or course and shows attendance, fees, examinations or everything.
   // The study tools (Ask anything, Explain, Quiz ...) and the other lookups were removed from the menu on purpose, so only this
@@ -55,7 +60,7 @@ export const findMode = (role, id) => modesFor(role).find((m) => m.id === id) ||
 
 // Data that is put inside <people_data> / <campus_data> comes from the database (names, course contents typed by users...).
 // Remove anything that looks like our own closing tag, so text typed by a user can never end the data block and pretend to be an instruction.
-export const fenceData = (text) => String(text ?? '').replace(/<\/?\s*(people_data|campus_data|records_data|materials|excerpt)[^>]*>/gi, '');
+export const fenceData = (text) => String(text ?? '').replace(/<\/?\s*(people_data|campus_data|records_data|report_data|library_data|materials|excerpt)[^>]*>/gi, '');
 
 const BASE = `You are the AI study and teaching assistant of a university, a helpful conversational assistant like ChatGPT for academic and educational questions.
 You help with any subject: explaining concepts, solving problems step by step, giving examples, summarising, translating (English, Urdu, Roman Urdu), writing and study skills, programming, and education or career guidance.

@@ -25,14 +25,16 @@ export const createUser = asyncHandler(async (req, res) => {
   const { role, department } = req.body;
   const isHead = req.user.role === ROLES.UNIVERSITY_HEAD;
 
-  if (!isHead && role === ROLES.FINANCE_OFFICER) throw ApiError.forbidden('Only the University Head can add finance officers');
+  // The finance officer and the library controller belong to the whole college (no department). Only the principal gives these accesses.
+  const collegeRole = [ROLES.FINANCE_OFFICER, ROLES.LIBRARY_CONTROLLER].includes(role);
+  if (!isHead && collegeRole) throw ApiError.forbidden('Only the University Head can add finance officers and library controllers');
 
   let deptId = department;
   if (!isHead) deptId = req.user.department; // HOD is forced into their own department
   // A common-subject teacher (English, Mathematics, Islamiat...) belongs to the whole college. Only the principal can add one,
   // and a home department is optional for them (there is no "Mathematics department" to put them in).
   const collegeWide = role === ROLES.TEACHER && isHead && !!req.body.allDepartments;
-  if (role !== ROLES.FINANCE_OFFICER) {
+  if (!collegeRole) {
     if (!deptId && !collegeWide) throw ApiError.badRequest('Choose a department, or tick "Teaches in every department" for a common-subject teacher');
     if (deptId) {
       assertDepartmentAccess(req.user, deptId);

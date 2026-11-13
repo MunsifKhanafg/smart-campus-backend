@@ -48,7 +48,7 @@ export const createUserSchema = z.object({
   email: z.string().email().toLowerCase(),
   password: z.string().min(8).max(72),
   // Students are created from the Students page (POST /api/students) so a login and a profile always exist together.
-  role: z.enum([ROLES.FINANCE_OFFICER, ROLES.TEACHER]),
+  role: z.enum([ROLES.FINANCE_OFFICER, ROLES.LIBRARY_CONTROLLER, ROLES.TEACHER]),
   ...teachingFields,
   department: objectId.optional(),
   phone: z.string().max(30).optional(),

@@ -2,6 +2,7 @@ export const ROLES = Object.freeze({
   UNIVERSITY_HEAD: 'university_head',
   HOD: 'hod',
   FINANCE_OFFICER: 'finance_officer',
+  LIBRARY_CONTROLLER: 'library_controller', // runs the library. Created by the principal, belongs to no department (like the finance officer)
   TEACHER: 'teacher',
   STUDENT: 'student',
 });
@@ -99,6 +100,21 @@ export const COMPLAINT_CATEGORIES = [
 ];
 export const COMPLAINT_RECIPIENTS = ['hod', 'university_head', 'finance_officer'];
 export const COMPLAINT_STATUS = Object.freeze({ OPEN: 'open', IN_REVIEW: 'in_review', RESOLVED: 'resolved', REJECTED: 'rejected' });
+
+// ---------- Library ----------
+// Complaints the library files by itself when a student does not return a book. They live in the normal Complaint collection, so the HOD
+// (and the principal) review and resolve them on the existing Complaints page. Students cannot pick these categories themselves.
+export const LIBRARY_COMPLAINT_CATEGORIES = ['library_overdue', 'library_lost'];
+export const BOOK_COPY_STATUS = Object.freeze({
+  AVAILABLE: 'available',
+  ISSUED: 'issued',
+  RESERVED: 'reserved', // held at the desk for the student who reserved the book
+  LOST: 'lost',
+  DAMAGED: 'damaged',
+  WITHDRAWN: 'withdrawn', // taken out of the collection (kept for history)
+});
+export const LOAN_STATUS = Object.freeze({ ISSUED: 'issued', RETURNED: 'returned', LOST: 'lost' });
+export const RESERVATION_STATUS = Object.freeze({ WAITING: 'waiting', READY: 'ready', FULFILLED: 'fulfilled', CANCELLED: 'cancelled', EXPIRED: 'expired' });
 
 // ---------- New student admission applications (public portal) ----------
 export const APPLICATION_STATUS = Object.freeze({

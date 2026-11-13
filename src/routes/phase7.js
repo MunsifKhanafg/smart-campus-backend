@@ -13,7 +13,7 @@ import { overview } from '../controllers/reportController.js';
 import { ask, listConversations, getConversation, myPerformance, coursePerformance, departmentPerformance } from '../controllers/assistantController.js';
 import { listModes, chat, removeConversation, renameConversation } from '../controllers/chatController.js';
 
-const { UNIVERSITY_HEAD, HOD, FINANCE_OFFICER, TEACHER, STUDENT } = ROLES;
+const { UNIVERSITY_HEAD, HOD, FINANCE_OFFICER, LIBRARY_CONTROLLER, TEACHER, STUDENT } = ROLES;
 const idParam = validate(z.object({ id: objectId }), 'params');
 const courseParam = validate(z.object({ courseId: objectId }), 'params');
 const fileParam = validate(z.object({ id: objectId, storedName: z.string().regex(/^[a-f0-9]{32}\.[a-z0-9]{3,4}$/) }), 'params');
@@ -60,13 +60,16 @@ const renameSchema = z.object({ title: z.string().trim().min(1).max(80) });
 export const aiRouter = Router();
 aiRouter.use(protect);
 aiRouter.post('/ask', authorize(HOD, UNIVERSITY_HEAD), aiLimiter, validate(askSchema), ask);
-aiRouter.get('/conversations', authorize(HOD, UNIVERSITY_HEAD, FINANCE_OFFICER), validate(convoQuery, 'query'), listConversations);
-aiRouter.get('/conversations/:id', authorize(HOD, UNIVERSITY_HEAD, FINANCE_OFFICER), idParam, getConversation);
+// Students and the library controller reach ONLY the library assistant (modesFor() in services/chatModes.js gives them that one option, and
+// the chat controller loads a student's own library record only). Their conversations are their own: every query filters by the logged-in user.
+const CHAT_ROLES = [HOD, UNIVERSITY_HEAD, FINANCE_OFFICER, STUDENT, LIBRARY_CONTROLLER];
+aiRouter.get('/conversations', authorize(...CHAT_ROLES), validate(convoQuery, 'query'), listConversations);
+aiRouter.get('/conversations/:id', authorize(...CHAT_ROLES), idParam, getConversation);
 // General AI assistant (ChatGPT-like): menu of tools, one message per request, rename and delete chats.
-aiRouter.get('/modes', authorize(HOD, UNIVERSITY_HEAD, FINANCE_OFFICER), listModes);
-aiRouter.post('/chat', authorize(HOD, UNIVERSITY_HEAD, FINANCE_OFFICER), aiLimiter, validate(chatSchema), chat);
-aiRouter.patch('/conversations/:id', authorize(HOD, UNIVERSITY_HEAD, FINANCE_OFFICER), idParam, validate(renameSchema), renameConversation);
-aiRouter.delete('/conversations/:id', authorize(HOD, UNIVERSITY_HEAD, FINANCE_OFFICER), idParam, removeConversation);
+aiRouter.get('/modes', authorize(...CHAT_ROLES), listModes);
+aiRouter.post('/chat', authorize(...CHAT_ROLES), aiLimiter, validate(chatSchema), chat);
+aiRouter.patch('/conversations/:id', authorize(...CHAT_ROLES), idParam, validate(renameSchema), renameConversation);
+aiRouter.delete('/conversations/:id', authorize(...CHAT_ROLES), idParam, removeConversation);
 aiRouter.get('/performance/me', authorize(STUDENT), aiLimiter, validate(planQuery, 'query'), myPerformance);
 aiRouter.get('/performance/department', authorize(HOD, UNIVERSITY_HEAD), validate(deptPerfQuery, 'query'), departmentPerformance);
 aiRouter.get('/performance/course/:courseId', authorize(TEACHER, HOD, UNIVERSITY_HEAD), courseParam, coursePerformance);

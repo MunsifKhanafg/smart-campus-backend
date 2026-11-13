@@ -4,6 +4,7 @@ import { sweepQuizzes } from '../src/services/quizService.js';
 import { deliverDueAnnouncements } from '../src/services/announcementService.js';
 import { autoPublishMerit } from '../src/services/meritService.js';
 import { runFeeReminders } from '../src/services/feeReminderService.js';
+import { runLibraryJobs } from '../src/services/libraryService.js';
 
 // On your own computer src/server.js runs these jobs on timers. Vercel has no timers, so Vercel Cron calls this address
 // once a day instead (see "crons" in vercel.json). Vercel sends  Authorization: Bearer <CRON_SECRET>  automatically
@@ -15,7 +16,7 @@ export default async function handler(req, res) {
   }
   try {
     if (mongoose.connection.readyState !== 1) await connectDB();
-    const jobs = { quizzes: sweepQuizzes, announcements: deliverDueAnnouncements, meritList: autoPublishMerit, feeReminders: runFeeReminders };
+    const jobs = { quizzes: sweepQuizzes, announcements: deliverDueAnnouncements, meritList: autoPublishMerit, feeReminders: runFeeReminders, library: () => runLibraryJobs({ force: true }) };
     const result = {};
     for (const [name, run] of Object.entries(jobs)) {
       try { result[name] = (await run()) ?? 'done'; } catch (err) { result[name] = `failed: ${err.message}`; }

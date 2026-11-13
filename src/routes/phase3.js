@@ -41,7 +41,7 @@ import {
   generateTimetable,
   myTimetable,
 } from '../controllers/timetableController.js';
-import { listEvents, createEvent, updateEvent, deleteEvent } from '../controllers/calendarController.js';
+import { listEvents, createEvent, updateEvent, deleteEvent, semesterDates } from '../controllers/calendarController.js';
 import { listMyNotifications, markRead, markAllRead, deleteNotification, clearNotifications } from '../controllers/notificationController.js';
 
 const { UNIVERSITY_HEAD, HOD, TEACHER, STUDENT } = ROLES;
@@ -89,6 +89,8 @@ timetableRouter.delete('/slots/:id', authorize(HOD), idParam, deleteSlot);
 export const calendarRouter = Router();
 calendarRouter.use(protect);
 calendarRouter.get('/', validate(listEventsQuery, 'query'), listEvents);
+// The new-semester form asks for the dates of a semester number. Must stay above '/:id'.
+calendarRouter.get('/semester-dates', authorize(HOD), validate(z.object({ number: z.string().regex(/^\d{1,2}$/), academicYear: z.string().max(20) }), 'query'), semesterDates);
 calendarRouter.post('/', authorize(UNIVERSITY_HEAD, HOD), validate(createEventSchema), createEvent);
 calendarRouter.put('/:id', authorize(UNIVERSITY_HEAD, HOD), idParam, validate(updateEventSchema), updateEvent);
 calendarRouter.delete('/:id', authorize(UNIVERSITY_HEAD, HOD), idParam, deleteEvent);

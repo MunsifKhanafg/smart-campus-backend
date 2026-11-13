@@ -22,7 +22,8 @@ import { localNow, addDays, weekdayOf, eachDay, toMinutes } from './staffAttenda
 
 // Everyone who works at the college and marks their own day: teachers, HODs and the finance officer (the finance officer has
 // no department and no classes, so only the check-in, the leave and the principal's review apply to them).
-export const STAFF_ROLES = [ROLES.TEACHER, ROLES.HOD, ROLES.FINANCE_OFFICER];
+// The library controller works the same way as the finance officer: no department, no classes, and the principal reviews the leave.
+export const STAFF_ROLES = [ROLES.TEACHER, ROLES.HOD, ROLES.FINANCE_OFFICER, ROLES.LIBRARY_CONTROLLER];
 // Calendar entries on which the college itself is closed (examinations are NOT in this list: the teachers still come).
 const CLOSED_TYPES = ['holiday', 'summer_vacation', 'winter_vacation', 'semester_break'];
 const dayRange = (key) => ({ $gte: new Date(`${key}T00:00:00Z`), $lt: new Date(`${addDays(key, 1)}T00:00:00Z`) });

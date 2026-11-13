@@ -4,10 +4,9 @@ import SupportDuty from '../models/SupportDuty.js';
 import Department from '../models/Department.js';
 import { ApiError, asyncHandler, sendSuccess } from '../utils/apiHelpers.js';
 import { logAudit } from '../utils/audit.js';
-import { assertDepartmentAccess } from '../middleware/auth.js';
+import { assertPlacementAccess, canonicalOffice } from '../utils/placement.js';
 import { sniffImage, MAX_PHOTO_BYTES } from '../services/imageSniff.js';
 import { formatCnic } from '../validators/supportStaffSchemas.js';
-import { placeFilter } from '../services/supportPlace.js';
 import { ROLES, DEPARTMENT_STATUS } from '../config/constants.js';
 
 const escapeRx = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -15,14 +14,17 @@ const escapeRx = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const loadStaff = async (id, user, select = '') => {
   const staff = await SupportStaff.findById(id).select(select);
   if (!staff) throw ApiError.notFound('Staff member not found');
-  assertDepartmentAccess(user, staff.department); // an HOD only reaches their own department's staff
+  assertPlacementAccess(user, staff); // an HOD only reaches their own department's staff; office staff belong to the principal
   return staff;
 };
 
-// The principal sees every department (or one); an HOD always only their own.
+// The principal sees every department and office (or one place); an HOD always only their own department.
 export const listStaff = asyncHandler(async (req, res) => {
-  const { status, search } = req.query;
-  const filter = placeFilter(req.user, req.query); // an HOD: own department. The principal: everything, one department, or the offices
+  const { status, search, department, office } = req.query;
+  const filter = {};
+  if (req.user.role === ROLES.HOD) filter.department = req.user.department;
+  else if (department) filter.department = department;
+  else if (office) filter.office = office;
   if (status) filter.status = status;
   if (search) {
     const rx = new RegExp(escapeRx(search), 'i');
@@ -39,27 +41,32 @@ export const getStaff = asyncHandler(async (req, res) => {
 });
 
 export const createStaff = asyncHandler(async (req, res) => {
-  // The place of duty: a department OR an office that belongs to no department (main college, principal's office, controller office,
-  // finance office ...). An HOD's staff always go to their own department; only the principal adds office staff.
-  const isHod = req.user.role === ROLES.HOD;
-  const deptId = isHod ? req.user.department : req.body.department;
-  const office = isHod ? '' : String(req.body.office || '').trim();
-  if (deptId && office) throw ApiError.badRequest('Choose a department OR an office, not both');
-  if (!deptId && !office) throw ApiError.badRequest('Choose where this staff member works: a department or an office');
+  const { department: bodyDept, office: bodyOffice, ...rest } = req.body;
+  if (rest.cnic) rest.cnic = formatCnic(rest.cnic);
+  const place = {};
 
-  let place = { department: null, office };
-  let placeName = office;
-  if (deptId) {
-    const dept = await Department.findById(deptId);
-    if (!dept || dept.status !== DEPARTMENT_STATUS.ACTIVE) throw ApiError.badRequest('Department not found or not active');
-    place = { department: dept._id, office: '' };
-    placeName = dept.code;
+  if (req.user.role === ROLES.HOD) {
+    // An HOD only adds to their own department, whatever the request says.
+    if (!req.user.department) throw ApiError.badRequest('No department is assigned to your account');
+    place.department = req.user.department;
+  } else if (bodyDept && bodyOffice) {
+    throw ApiError.badRequest('Choose a department or an office, not both');
+  } else if (bodyDept) {
+    place.department = bodyDept;
+  } else if (bodyOffice) {
+    place.office = await canonicalOffice(bodyOffice, SupportStaff);
+  } else {
+    throw ApiError.badRequest('Choose the department or the office of this staff member');
   }
 
-  const { department: _d, office: _o, ...rest } = req.body;
-  if (rest.cnic) rest.cnic = formatCnic(rest.cnic);
+  let label = place.office;
+  if (place.department) {
+    const dept = await Department.findById(place.department);
+    if (!dept || dept.status !== DEPARTMENT_STATUS.ACTIVE) throw ApiError.badRequest('Department not found or not active');
+    label = dept.code;
+  }
   const staff = await SupportStaff.create({ ...rest, ...place, createdBy: req.user._id });
-  logAudit(req, 'support_staff.create', 'SupportStaff', staff._id, { name: staff.name, designation: staff.designation, place: placeName });
+  logAudit(req, 'support_staff.create', 'SupportStaff', staff._id, { name: staff.name, designation: staff.designation, place: label });
   sendSuccess(res, staff, 'Staff member added', 201);
 });
 

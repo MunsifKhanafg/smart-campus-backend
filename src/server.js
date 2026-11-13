@@ -6,6 +6,7 @@ import { sweepQuizzes } from './services/quizService.js';
 import { deliverDueAnnouncements } from './services/announcementService.js';
 import { autoPublishMerit } from './services/meritService.js';
 import { runFeeReminders } from './services/feeReminderService.js';
+import { runLibraryJobs } from './services/libraryService.js';
 import { checkEnv } from './config/validateEnv.js';
 
 // Refuse to start with an unsafe configuration (see config/validateEnv.js and docs/SECURITY_REVIEW.md).
@@ -58,7 +59,19 @@ const runReminders = () => {
 const reminderJob = setInterval(runReminders, 30 * 60 * 1000);
 const reminderStart = setTimeout(runReminders, 30 * 1000);
 
+// Every 30 minutes (and shortly after start-up): the library's automatic work. Expires held reservations, sends the SMS / in-app reminders before and
+// after the return date (repeated at the interval set in Library > Rules, and only until the book is returned), detects students who did not
+// return a book and files the complaints. Every message and complaint is claimed in the database first, so a restart never sends one twice.
+const runLibrary = () => {
+  if (!dbConnected()) return;
+  runLibraryJobs({ force: true }).catch((e) => console.error('Library job failed:', e.message));
+};
+const libraryJob = setInterval(runLibrary, 30 * 60 * 1000);
+const libraryStart = setTimeout(runLibrary, 45 * 1000);
+
 const shutdown = () => {
+  clearInterval(libraryJob);
+  clearTimeout(libraryStart);
   clearInterval(reminderJob);
   clearTimeout(reminderStart);
   clearInterval(job);

@@ -166,3 +166,34 @@ export const renderAdmitCard = (res, { settings, student, profile, department, s
   doc.text(`Admission ID: ${admission._id}. Bring this card and your student ID to every paper.`, 40, doc.y, { width: 515 });
   doc.end();
 };
+
+// ---------------------------------------------------------------------------------------------
+// A plain table report (the library reports). columns: [{ label, width }] (widths are relative, they are scaled to the page),
+// rows: arrays of values, summary: [[label, value]].
+export const renderTableReport = (res, { settings, title, filename, summary = [], columns, rows, generated = '' }) => {
+  const doc = start(res, filename);
+  header(doc, settings, title);
+  if (generated) doc.font('Helvetica').fontSize(8).fillColor('#555555').text(generated, 40, doc.y - 4, { width: 515, align: 'right' }).fillColor('#000000');
+  if (summary.length) infoRows(doc, summary);
+  const total = columns.reduce((s, c) => s + (c.width || 60), 0);
+  const cols = columns.map((c) => ({ ...c, w: Math.floor(((c.width || 60) / total) * 515) }));
+  const rowH = 20;
+  const drawRow = (cells, bold) => {
+    if (doc.y + rowH > 790) { doc.addPage(); doc.x = 40; }
+    const y = doc.y;
+    let x = 40;
+    doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(7.5);
+    if (bold) doc.rect(40, y, cols.reduce((s, c) => s + c.w, 0), rowH).fill('#e8edf5').fillColor('#000000');
+    cols.forEach((c, i) => {
+      doc.rect(x, y, c.w, rowH).lineWidth(0.5).stroke();
+      doc.text(String(cells[i] ?? ''), x + 3, y + 6, { width: c.w - 6, height: 10, ellipsis: true, lineBreak: false });
+      x += c.w;
+    });
+    doc.y = y + rowH;
+  };
+  drawRow(cols.map((c) => c.label), true);
+  if (!rows.length) { doc.moveDown(1); doc.font('Helvetica').fontSize(10).text('No records for this report.', 40, doc.y, { width: 515 }); }
+  rows.forEach((r) => drawRow(r, false));
+  doc.x = 40;
+  doc.end();
+};
