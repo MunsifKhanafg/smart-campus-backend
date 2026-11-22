@@ -9,17 +9,19 @@ import {
 } from '../validators/librarySchemas.js';
 import * as c from '../controllers/libraryController.js';
 
-const { LIBRARY_CONTROLLER, STUDENT } = ROLES;
+const { LIBRARY_CONTROLLER, UNIVERSITY_HEAD, STUDENT } = ROLES;
 const idParam = validate(z.object({ id: objectId }), 'params');
 const studentParam = validate(z.object({ id: z.string().trim().min(1).max(40) }), 'params'); // an id or a roll number
 
 // ============================================================================================================
 // /api/library
-//   Library controller (LIBRARY_CONTROLLER): runs the whole library (books, desk, reservations, fines, reports, rules).
-//                                            This is the ONLY staff role with library access. The principal has no library screens.
-//   Student: read-only. The catalogue (which books are available) and their OWN issued books, return dates, overdue books and
-//            library notifications (the id comes from the login token, never from the request).
-//            Students cannot borrow, reserve, renew or return books online: that happens at the Library Office.
+//   Library controller (LIBRARY_CONTROLLER): runs the whole library (books, the desk, fines, reservations, reports, rules).
+//                                            The principal gives somebody this access by creating a "Library Controller" account (Users page).
+//   Principal (UNIVERSITY_HEAD)            : full access too. The principal can see everything the library does and can also run it (issue, receive,
+//                                            edit books, take payments, change the rules). Every action is written to the activity log with the principal's name.
+//   Student                                : read-only. The catalogue (which books are available) and their OWN issued books, return dates,
+//                                            overdue books and library notifications (the id comes from the login token, never from the request).
+//                                            Students cannot borrow, reserve, renew or return books online: that happens at the Library Office.
 // ============================================================================================================
 export const libraryRouter = Router();
 libraryRouter.use(protect);
@@ -28,25 +30,27 @@ libraryRouter.use(protect);
 libraryRouter.get('/me/summary', authorize(STUDENT), c.mySummary);
 libraryRouter.get('/me/messages', authorize(STUDENT), c.myMessages);
 
-// ----- the catalogue: library controller and students -----
-libraryRouter.get('/books', authorize(STUDENT, LIBRARY_CONTROLLER), validate(booksQuery, 'query'), c.listBooks);
-libraryRouter.get('/categories', authorize(STUDENT, LIBRARY_CONTROLLER), c.categories);
+// ----- the catalogue: library controller, principal (monitoring) and students -----
+libraryRouter.get('/books', authorize(STUDENT, LIBRARY_CONTROLLER, UNIVERSITY_HEAD), validate(booksQuery, 'query'), c.listBooks);
+libraryRouter.get('/categories', authorize(STUDENT, LIBRARY_CONTROLLER, UNIVERSITY_HEAD), c.categories);
 
-// ----- everything else: the library controller only -----
-const run = authorize(LIBRARY_CONTROLLER);
-libraryRouter.get('/dashboard', run, c.dashboard);
-libraryRouter.get('/books/:id', run, idParam, c.getBook);
-libraryRouter.get('/students', run, validate(studentsQuery, 'query'), c.students);
-libraryRouter.get('/students/:id', run, studentParam, c.studentDetail);
-libraryRouter.get('/loans', run, validate(loansQuery, 'query'), c.listLoans);
-libraryRouter.get('/reservations', run, validate(reservationsQuery, 'query'), c.listReservations);
-libraryRouter.get('/messages', run, validate(messagesQuery, 'query'), c.listMessages);
-libraryRouter.get('/activity', run, validate(activityQuery, 'query'), c.listActivity);
-libraryRouter.get('/complaints', run, validate(complaintsQuery, 'query'), c.listLibraryComplaints);
-libraryRouter.get('/rules', run, c.getRules);
+// ----- reading everything else: library controller and principal (monitoring) -----
+const watch = authorize(LIBRARY_CONTROLLER, UNIVERSITY_HEAD);
+libraryRouter.get('/dashboard', watch, c.dashboard);
+libraryRouter.get('/books/:id', watch, idParam, c.getBook);
+libraryRouter.get('/students', watch, validate(studentsQuery, 'query'), c.students);
+libraryRouter.get('/students/:id', watch, studentParam, c.studentDetail);
+libraryRouter.get('/loans', watch, validate(loansQuery, 'query'), c.listLoans);
+libraryRouter.get('/reservations', watch, validate(reservationsQuery, 'query'), c.listReservations);
+libraryRouter.get('/messages', watch, validate(messagesQuery, 'query'), c.listMessages);
+libraryRouter.get('/activity', watch, validate(activityQuery, 'query'), c.listActivity);
+libraryRouter.get('/complaints', watch, validate(complaintsQuery, 'query'), c.listLibraryComplaints);
+libraryRouter.get('/rules', watch, c.getRules);
+libraryRouter.get('/reports/:type', watch, validate(reportParams, 'params'), validate(reportQuery, 'query'), c.report);
+
+// ----- everything that changes something: the library controller and the principal -----
+const run = authorize(LIBRARY_CONTROLLER, UNIVERSITY_HEAD);
 libraryRouter.put('/rules', run, validate(rulesSchema), c.saveRules);
-libraryRouter.get('/reports/:type', run, validate(reportParams, 'params'), validate(reportQuery, 'query'), c.report);
-
 libraryRouter.post('/books', run, validate(bookSchema), c.createBook);
 libraryRouter.put('/books/:id', run, idParam, validate(bookUpdateSchema), c.updateBook);
 libraryRouter.delete('/books/:id', run, idParam, c.removeBook);

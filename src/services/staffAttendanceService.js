@@ -190,7 +190,7 @@ export const ensureAbsentees = async () => {
     const { moved } = await moveTopicsToNextDay(d.user, d.date);
     if (moved) await StaffAttendance.updateOne({ user: d.user, date: d.date }, { topicsMoved: moved });
     if (d.status === 'absent') {
-      await notifyUsers([d.user], { title: 'Marked absent', message: `You were marked absent on ${d.date} because you did not check in before ${rules.absentAfter}. If this is wrong, ask your HOD to correct it.`, type: 'attendance', link: '/staff-attendance' });
+      await notifyUsers([d.user], { title: 'Marked absent', message: `You were marked absent on ${d.date} because you did not check in before ${rules.absentAfter}. If this is wrong, ask ${d.department ? 'your HOD or the principal' : 'the principal'} to correct it.`, type: 'attendance', link: '/staff-attendance' });
     }
   }
   return { marked: docs.length };

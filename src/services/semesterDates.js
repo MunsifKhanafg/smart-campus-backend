@@ -5,11 +5,14 @@
 
 const day = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v).slice(0, 10));
 
+// ---------- Semester length ----------
 // A semester lasts 18 weeks by default: 16 weeks of teaching (the midterm week is one of them) + 2 weeks of final examinations.
-// The same number is used by the default academic calendar (services/calendarTemplates.js).
+// The same number is used by the default academic calendar (services/calendarTemplates.js), so a semester created from a duration
+// and a semester created from the calendar end on the same kind of day.
 export const DEFAULT_SEMESTER_WEEKS = 18;
 
-// End date = start date + N weeks - 1 day (the last day of week N). Returns a Date at UTC midnight, or null for invalid input.
+// End date = start date + N weeks - 1 day (the last day of week N). The end day is included, so a semester that starts on a Monday
+// ends on the Sunday of its last week. `start` is a Date or "YYYY-MM-DD". Returns a Date at UTC midnight, or null for invalid input.
 // Used when the semester end date is calculated from the start date and the duration (and again whenever either one changes).
 export const computeEndDate = (start, weeks = DEFAULT_SEMESTER_WEEKS) => {
   const n = Number(weeks);

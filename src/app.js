@@ -20,6 +20,7 @@ import { staffAttendanceRouter } from './routes/staffAttendance.js';
 import { supportStaffRouter } from './routes/supportStaff.js';
 import { studentLeaveRouter } from './routes/studentLeave.js';
 import { libraryRouter } from './routes/library.js';
+import { proformaRouter } from './routes/proforma.js';
 import { notFound, errorHandler } from './middleware/errorHandler.js';
 import { apiLimiter } from './middleware/rateLimit.js';
 import { BRANDING_DIR } from './middleware/upload.js';
@@ -109,6 +110,7 @@ app.use('/api/quizzes', quizRouter);
 // Phase 5
 app.use('/api/examinations', examinationRouter);
 app.use('/api/marks', marksRouter);
+app.use('/api/proforma', proformaRouter); // subject-wise marks proforma (40 internal + 60 final), PDF / Excel, send to the office
 app.use('/api/results', resultRouter);
 
 // Phase 6
