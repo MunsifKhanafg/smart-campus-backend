@@ -1,5 +1,6 @@
 import { ApiError } from '../utils/apiHelpers.js';
 import { retrieveChunks } from './ragService.js';
+import { findTopicInfo, retrieveTopicChunks } from './topicLookup.js';
 import { fenceData } from './chatModes.js';
 
 // The API key lives ONLY in server/.env (AI_API_KEY). The React app never sees it.
@@ -46,8 +47,17 @@ Rules:
 
 // RAG: 1) find the passages the user is allowed to see, 2) let the model answer using only those passages.
 export const answerFromMaterials = async ({ question, courseIds, history = [], includeUnreleased = false }) => {
-  const chunks = await retrieveChunks({ courseIds, question, includeUnreleased });
+  // 1) Facts about a topic the question names (date, day, class, teacher...). They come from the database, never from the AI.
+  const info = await findTopicInfo({ courseIds, question, includeUnreleased });
+  let chunks = await retrieveChunks({ courseIds, question, includeUnreleased });
+  if (info.topicIds.length) {
+    // 2) Put the notes of the named topic first, so the explanation is about that topic.
+    const own = await retrieveTopicChunks({ topicIds: info.topicIds, includeUnreleased });
+    const seen = new Set();
+    chunks = [...own, ...chunks].filter((c) => !seen.has(String(c._id)) && seen.add(String(c._id))).slice(0, 6);
+  }
   if (!chunks.length) {
+    if (info.text) return { answer: `${info.text}\n\nThere are no uploaded notes for this topic that you can read yet.`, grounded: true, sources: [] };
     return {
       answer: 'I could not find this in the course materials that are available to you yet. Try different keywords, or ask your teacher.',
       grounded: false,
@@ -58,7 +68,7 @@ export const answerFromMaterials = async ({ question, courseIds, history = [], i
 
   if (!llmConfigured()) {
     return {
-      answer: `The AI model is not configured on this server, so here are the most relevant passages from your course materials:\n\n${chunks.slice(0, 3).map((c, i) => `${i + 1}. (${c.topic?.title}) ${c.text.slice(0, 500)}`).join('\n\n')}`,
+      answer: `${info.text ? `${info.text}\n\n` : ''}The AI model is not configured on this server, so here are the most relevant passages from your course materials:\n\n${chunks.slice(0, 3).map((c, i) => `${i + 1}. (${c.topic?.title}) ${c.text.slice(0, 500)}`).join('\n\n')}`,
       grounded: true,
       sources,
     };
@@ -67,8 +77,8 @@ export const answerFromMaterials = async ({ question, courseIds, history = [], i
   const materials = chunks.map((c, i) => `<excerpt id="${i + 1}" topic="${fenceData(c.topic?.title || '')}" file="${fenceData(c.fileName)}">\n${fenceData(c.text)}\n</excerpt>`).join('\n');
   const messages = [
     ...history.slice(-6).map((m) => ({ role: m.role, content: m.content })),
-    { role: 'user', content: `<materials>\n${materials}\n</materials>\n\nStudent question: ${question}` },
+    { role: 'user', content: `<materials>\n${materials}\n</materials>\n\nStudent question: ${question}${info.text ? '\n\n(The date, class and teacher of the topic are shown to the student separately. Do not repeat them; explain the topic from the excerpts.)' : ''}` },
   ];
   const answer = await callLLM({ system: SYSTEM, messages });
-  return { answer, grounded: true, sources };
+  return { answer: info.text ? `${info.text}\n\n${answer}` : answer, grounded: true, sources };
 };

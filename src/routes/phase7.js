@@ -59,7 +59,8 @@ const renameSchema = z.object({ title: z.string().trim().min(1).max(80) });
 
 export const aiRouter = Router();
 aiRouter.use(protect);
-aiRouter.post('/ask', authorize(HOD, UNIVERSITY_HEAD), aiLimiter, validate(askSchema), ask);
+// The course assistant (notes of ONE course; getCourseFor() lets a student in only for a course he is enrolled in, and he never sees topics not yet released).
+aiRouter.post('/ask', authorize(HOD, UNIVERSITY_HEAD, STUDENT), aiLimiter, validate(askSchema), ask);
 // Students and the library controller reach ONLY the library assistant (modesFor() in services/chatModes.js gives them that one option, and
 // the chat controller loads a student's own library record only). Their conversations are their own: every query filters by the logged-in user.
 const CHAT_ROLES = [HOD, UNIVERSITY_HEAD, FINANCE_OFFICER, STUDENT, LIBRARY_CONTROLLER];
