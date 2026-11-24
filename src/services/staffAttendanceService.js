@@ -7,6 +7,7 @@ import UniversitySettings from '../models/UniversitySettings.js';
 import StaffAttendance from '../models/StaffAttendance.js';
 import StaffAttendanceRules from '../models/StaffAttendanceRules.js';
 import StaffLeave from '../models/StaffLeave.js';
+import TimetableSlot from '../models/TimetableSlot.js';
 import { teachingCalendar, dayMs } from './teachingCalendarService.js';
 import { carryForward, MAX_PER_CLASS } from './topicPlanner.js';
 import { syncTopicRelease } from './ragService.js';
@@ -57,14 +58,14 @@ const bySequence = (a, b) => (a.sequence || 1e9) - (b.sequence || 1e9) || +a.sch
 
 // Future days of approved leave of this person (ms), so a missed topic is never moved onto another day the teacher is away.
 const leaveDaysAfter = async (userId, fromKey) => {
-  const leaves = await StaffLeave.find({ user: userId, status: 'approved', toDate: { $gte: fromKey } }).lean();
+  const leaves = await StaffLeave.find({ user: userId, status: 'approved', kind: { $ne: 'rest_of_day' }, toDate: { $gte: fromKey } }).lean();
   const away = new Set();
   for (const l of leaves) for (const k of eachDay(l.fromDate > fromKey ? l.fromDate : fromKey, l.toDate, 120)) away.add(keyMs(k));
   return away;
 };
 
-export const moveTopicsToNextDay = async (userId, dateKey) => {
-  const courses = await Course.find({ teacher: userId, status: COURSE_STATUS.ACTIVE }).populate('semester');
+export const moveTopicsToNextDay = async (userId, dateKey, { courseIds = null } = {}) => {
+  const courses = await Course.find({ teacher: userId, status: COURSE_STATUS.ACTIVE, ...(courseIds ? { _id: { $in: courseIds } } : {}) }).populate('semester');
   let moved = 0;
   let shifted = 0;
   let stuck = 0;
@@ -157,6 +158,7 @@ export const moveTopicsToNextDay = async (userId, dateKey) => {
 export const ensureAbsentees = async () => {
   const [rules, settings] = await Promise.all([StaffAttendanceRules.getRules(), UniversitySettings.getSettings()]);
   const now = localNow(new Date(), rules.timezone);
+  await markMissedAfternoons(rules, now); // the break-time attendance of today and of the days before it
   const from = addDays(now.dateKey, -6);
   const days = eachDay(from, now.dateKey).filter((d) => d < now.dateKey || now.minutes >= toMinutes(rules.absentAfter));
   if (!days.length) return { marked: 0 };
@@ -165,7 +167,7 @@ export const ensureAbsentees = async () => {
     User.find({ role: { $in: STAFF_ROLES }, isActive: true }).select('_id department createdAt').lean(),
     loadClosedEvents(from, now.dateKey),
     StaffAttendance.find({ date: { $in: days } }).select('user date').lean(),
-    StaffLeave.find({ status: 'approved', fromDate: { $lte: now.dateKey }, toDate: { $gte: from } }).lean(),
+    StaffLeave.find({ status: 'approved', kind: { $ne: 'rest_of_day' }, fromDate: { $lte: now.dateKey }, toDate: { $gte: from } }).lean(),
   ]);
   const have = new Set(existing.map((r) => `${r.user}:${r.date}`));
   const docs = [];
@@ -221,6 +223,76 @@ export const applyApprovedLeave = async (leave) => {
     if (moved) await StaffAttendance.updateOne({ user: leave.user, date }, { topicsMoved: moved });
   }
   return { marked, topicsMoved };
+};
+
+// ---------- who decides ----------
+// A teacher's requests are decided by the HOD of the department (or the principal); everybody else's by the principal.
+export const reviewerIdsFor = (person) =>
+  User.find({
+    isActive: true,
+    $or: person.role === ROLES.TEACHER ? [{ role: ROLES.UNIVERSITY_HEAD }, { role: ROLES.HOD, department: person.department }] : [{ role: ROLES.UNIVERSITY_HEAD }],
+  }).distinct('_id');
+
+// ---------- the break-time attendance ----------
+// Somebody who checked in in the morning but did not mark the break-time attendance (inside the college, between middayOpensAt and closesAt)
+// and had no approved rest-of-day leave is flagged "missed": they most likely left the college. Runs whenever the attendance pages are opened.
+// Days from before the rule existed (middayFrom) are never flagged.
+export const markMissedAfternoons = async (rules, now) => {
+  if (!rules.middayRequired) return 0;
+  if (!rules.middayFrom) {
+    // First use of the rule: it starts today if the break is still ahead, otherwise tomorrow, so nobody is flagged for a rule they never saw.
+    rules.middayFrom = now.minutes < toMinutes(rules.closesAt) ? now.dateKey : addDays(now.dateKey, 1);
+    await rules.save();
+  }
+  const last = now.minutes >= toMinutes(rules.closesAt) ? now.dateKey : addDays(now.dateKey, -1);
+  if (rules.middayFrom > last) return 0;
+  const rows = await StaffAttendance.find({
+    date: { $gte: rules.middayFrom, $lte: last }, status: { $in: ['present', 'late'] }, afternoon: { $in: ['', null] }, 'midday.at': null,
+  }).select('user date').lean();
+  if (!rows.length) return 0;
+  await StaffAttendance.updateMany({ _id: { $in: rows.map((r) => r._id) } }, { $set: { afternoon: 'missed' } });
+
+  const people = await User.find({ _id: { $in: rows.map((r) => r.user) } }).select('name role department').lean();
+  const byId = new Map(people.map((p) => [String(p._id), p]));
+  for (const r of rows) {
+    const p = byId.get(String(r.user));
+    if (!p) continue;
+    try {
+      await notifyUsers([p._id], {
+        title: 'Break-time attendance missed',
+        message: `You checked in on ${r.date} but did not mark the break-time attendance, and you had no approved leave for the rest of the day. It is recorded as missed.`,
+        type: 'attendance', link: '/staff-attendance',
+      });
+      const reviewers = (await reviewerIdsFor(p)).filter((id) => String(id) !== String(p._id));
+      await notifyUsers(reviewers, {
+        title: 'Break-time attendance missed',
+        message: `${p.name} checked in on ${r.date} but did not mark the break-time attendance and had no approved leave for the rest of the day.`,
+        type: 'attendance', link: '/staff-attendance',
+      });
+    } catch (err) {
+      console.error('Notifying about a missed break-time attendance failed:', err.message);
+    }
+  }
+  return rows.length;
+};
+
+// ---------- approved leave for the rest of the day ----------
+// The person already checked in today and the HOD / principal approved leaving at leave.leaveTime. The break-time attendance is no longer
+// needed, and the classes that are not finished by the leave time are not taught: their contents move to the next teaching day.
+export const applyRestOfDayLeave = async (leave) => {
+  const date = leave.fromDate;
+  const record = await StaffAttendance.findOne({ user: leave.user, date });
+  if (record && ['present', 'late'].includes(record.status)) {
+    record.shortLeave = leave._id;
+    if (record.afternoon !== 'present') record.afternoon = 'leave';
+    await record.save();
+  }
+  const slots = await TimetableSlot.find({ teacher: leave.user, day: weekdayOf(date), endMinutes: { $gt: toMinutes(leave.leaveTime) } }).select('course').lean();
+  const courseIds = [...new Set(slots.map((s) => String(s.course)))];
+  if (!courseIds.length) return { topicsMoved: 0 };
+  const { moved } = await moveTopicsToNextDay(leave.user, date, { courseIds });
+  if (moved && record) await StaffAttendance.updateOne({ _id: record._id }, { $inc: { topicsMoved: moved } });
+  return { topicsMoved: moved };
 };
 
 // Who may a reviewer manage? The principal: every teacher and HOD. An HOD: the teachers of their own department.

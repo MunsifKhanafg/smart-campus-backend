@@ -47,6 +47,21 @@ export const checkInDecision = ({ nowMin, opensAt, graceMinutes, absentAfter }) 
   return late > 0 ? { state: 'late', status: 'late', minutesLate: late } : { state: 'on_time', status: 'present', minutesLate: 0 };
 };
 
+// "08:30" for a minute of the day (the opposite of toMinutes).
+export const hhmm = (minutes) => `${String(Math.floor(minutes / 60) % 24).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+
+// The SECOND attendance, at the break (for example 1 pm). It proves the teacher stayed at the college and did not check in and go home.
+//   not_open : before it opens
+//   open     : from middayOpensAt until closesAt -> the teacher may mark (from inside the college)
+//   closed   : after closesAt -> a teacher who did not mark is flagged "missed"
+export const middayDecision = ({ nowMin, middayOpensAt, closesAt }) => {
+  const open = toMinutes(middayOpensAt);
+  const close = toMinutes(closesAt);
+  if (nowMin < open) return { state: 'not_open', opensInMinutes: open - nowMin };
+  if (nowMin >= close) return { state: 'closed' };
+  return { state: 'open', closesInMinutes: close - nowMin };
+};
+
 // Is the phone inside the campus circle? A location that is not exact enough cannot prove anything.
 export const checkProof = ({ campus, lat, lng, accuracy, maxAccuracyMeters }) => {
   const hasCampus = campus?.lat != null && campus?.lng != null;

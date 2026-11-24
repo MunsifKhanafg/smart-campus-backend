@@ -4,7 +4,7 @@ import { protect, authorize } from '../middleware/auth.js';
 import { validate, objectId } from '../validators/validate.js';
 import { ROLES } from '../config/constants.js';
 import {
-  getRules, updateRules, myToday, checkIn, checkOut, myMonth, overview, monthlySummary, markStaff, moveTopics,
+  getRules, updateRules, myToday, checkIn, middayCheckIn, checkOut, myMonth, overview, monthlySummary, markStaff, moveTopics,
   requestLeave, listLeaves, reviewLeave, cancelLeave,
 } from '../controllers/staffAttendanceController.js';
 
@@ -19,6 +19,8 @@ const rulesSchema = z.object({
   graceMinutes: z.number().int().min(0).max(240).optional(),
   absentAfter: time.optional(),
   closesAt: time.optional(),
+  middayRequired: z.boolean().optional(),
+  middayOpensAt: time.optional(),
   requireOnCampus: z.boolean().optional(),
   maxAccuracyMeters: z.number().int().min(10).max(2000).optional(),
   campus: z.object({
@@ -39,8 +41,12 @@ const leaveSchema = z.object({
   fromDate: day,
   toDate: day,
   type: z.enum(['casual', 'sick', 'official', 'other']).default('casual'),
+  // 'rest_of_day' = asked AFTER checking in, to leave the college at leaveTime today; the HOD / principal decides before the teacher may go.
+  kind: z.enum(['days', 'rest_of_day']).default('days'),
+  leaveTime: time.optional(),
   reason: z.string().trim().min(3, 'Please write the reason').max(600),
-}).refine((v) => v.toDate >= v.fromDate, { message: 'The last day cannot be before the first day', path: ['toDate'] });
+}).refine((v) => v.toDate >= v.fromDate, { message: 'The last day cannot be before the first day', path: ['toDate'] })
+  .refine((v) => v.kind !== 'rest_of_day' || !!v.leaveTime, { message: 'Choose the time you need to leave', path: ['leaveTime'] });
 
 const reviewSchema = z.object({ status: z.enum(['approved', 'rejected']), note: z.string().trim().max(300).optional() });
 const markSchema = z.object({
@@ -48,6 +54,7 @@ const markSchema = z.object({
   date: day,
   status: z.enum(['present', 'late', 'absent', 'leave']),
   note: z.string().trim().min(3, 'Write the reason for the correction').max(300),
+  afternoon: z.enum(['present', 'leave', 'missed']).optional(), // the break-time attendance of that day, when it needs correcting too
 });
 const moveSchema = z.object({ date: day, user: objectId.optional() });
 const monthQuery = z.object({ month: z.string().regex(/^\d{4}-\d{2}$/).optional(), date: day.optional(), department: objectId.optional(), scope: z.enum(['mine', 'review']).optional(), status: z.enum(['pending', 'approved', 'rejected', 'cancelled']).optional() });
@@ -62,6 +69,8 @@ staffAttendanceRouter.put('/rules', authorize(UNIVERSITY_HEAD), validate(rulesSc
 // A teacher's / HOD's / finance officer's own day.
 staffAttendanceRouter.get('/today', authorize(HOD, TEACHER, FINANCE_OFFICER, LIBRARY_CONTROLLER), myToday);
 staffAttendanceRouter.post('/check-in', authorize(HOD, TEACHER, FINANCE_OFFICER, LIBRARY_CONTROLLER), validate(checkInSchema), checkIn);
+// The second attendance, at the break (about 1 pm), made from inside the college.
+staffAttendanceRouter.post('/midday-check-in', authorize(HOD, TEACHER, FINANCE_OFFICER, LIBRARY_CONTROLLER), validate(checkInSchema), middayCheckIn);
 staffAttendanceRouter.post('/check-out', authorize(HOD, TEACHER, FINANCE_OFFICER, LIBRARY_CONTROLLER), checkOut);
 staffAttendanceRouter.get('/mine', authorize(HOD, TEACHER, FINANCE_OFFICER, LIBRARY_CONTROLLER), validate(monthQuery, 'query'), myMonth);
 

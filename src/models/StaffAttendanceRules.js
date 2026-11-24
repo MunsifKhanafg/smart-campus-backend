@@ -6,12 +6,21 @@ const staffAttendanceRulesSchema = new mongoose.Schema(
     key: { type: String, default: 'global', unique: true, immutable: true },
     timezone: { type: String, default: 'Asia/Karachi' },
     // Check-in opens when the college starts. Before this time nobody can check in.
-    opensAt: { type: String, default: '08:00', match: /^([01]\d|2[0-3]):[0-5]\d$/ },
+    opensAt: { type: String, default: '08:30', match: /^([01]\d|2[0-3]):[0-5]\d$/ },
     // Checking in up to this many minutes after the start is still "present". After that the day is flagged "late".
     graceMinutes: { type: Number, default: 15, min: 0, max: 240 },
     // Nobody checked in by this time -> the system marks the person absent (and moves that day's course contents to the next day).
     absentAfter: { type: String, default: '10:00', match: /^([01]\d|2[0-3]):[0-5]\d$/ },
-    closesAt: { type: String, default: '16:00', match: /^([01]\d|2[0-3]):[0-5]\d$/ }, // check-out is possible until this time
+    // The SECOND attendance, at the break (for example 1 pm): the teacher marks again, from the college. It proves that the teacher
+    // stayed and taught instead of checking in and going home. It opens at middayOpensAt and closes at closesAt.
+    // A teacher who checked in but did not mark it is flagged "missed", unless the HOD approved leave for the rest of the day.
+    // false = the college does not use the break-time attendance (only the morning check-in counts).
+    middayRequired: { type: Boolean, default: true },
+    // The first day the break-time attendance applies. Set automatically the first time it is used, so days from before it existed are never
+    // flagged as "missed".
+    middayFrom: { type: String, default: '', match: /^(\d{4}-\d{2}-\d{2})?$/ },
+    middayOpensAt: { type: String, default: '13:00', match: /^([01]\d|2[0-3]):[0-5]\d$/ },
+    closesAt: { type: String, default: '14:00', match: /^([01]\d|2[0-3]):[0-5]\d$/ }, // the break-time attendance is possible until this time
     // Proof of presence: the phone's location must be inside this circle around the campus.
     campus: {
       lat: { type: Number, default: null, min: -90, max: 90 },

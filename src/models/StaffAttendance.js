@@ -27,6 +27,24 @@ const staffAttendanceSchema = new mongoose.Schema(
     note: { type: String, trim: true, maxlength: 300, default: '' },
     markedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }, // set when an HOD / the principal corrected it
     topicsMoved: { type: Number, default: 0 }, // contents moved to the next teaching day because of this absence / leave
+
+    // The SECOND attendance, at the break (about 1 pm). It is made from inside the college, with the same location proof as the morning check-in,
+    // so a teacher cannot check in at 8:30 and then go home.
+    midday: {
+      at: Date,
+      proof: {
+        lat: Number,
+        lng: Number,
+        accuracy: Number,
+        distanceMeters: Number,
+        onCampus: { type: Boolean, default: null },
+        ip: { type: String, default: '' },
+      },
+    },
+    // present = marked at the break | leave = the HOD / principal approved leave for the REST OF THE DAY | missed = checked in in the morning but
+    // did not mark at the break and had no approved leave. '' = not decided yet (the break has not come) or not applicable (absent / leave all day).
+    afternoon: { type: String, enum: ['', 'present', 'leave', 'missed'], default: '' },
+    shortLeave: { type: mongoose.Schema.Types.ObjectId, ref: 'StaffLeave', default: null }, // the approved rest-of-day leave
   },
   { timestamps: true }
 );

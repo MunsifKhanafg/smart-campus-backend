@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { toMinutes, localNow, addDays, weekdayOf, eachDay, distanceMeters, checkInDecision, checkProof } from '../src/services/staffAttendanceRules.js';
+import { toMinutes, localNow, addDays, weekdayOf, eachDay, distanceMeters, checkInDecision, checkProof, middayDecision } from '../src/services/staffAttendanceRules.js';
 
 const R = { opensAt: '08:00', graceMinutes: 15, absentAfter: '10:00' };
 
@@ -23,6 +23,14 @@ test('the college day follows the college time zone, not the server', () => {
   assert.equal(n.dateKey, '2026-11-11');
   assert.equal(n.minutes, 8 * 60 + 30);
   assert.equal(localNow(new Date('2026-11-10T20:00:00Z'), 'Asia/Karachi').dateKey, '2026-11-11');
+});
+
+test('the break-time attendance: closed before it opens, open in its window, closed after it', () => {
+  const B = { middayOpensAt: '13:00', closesAt: '14:00' };
+  assert.deepEqual(middayDecision({ ...B, nowMin: toMinutes('12:30') }), { state: 'not_open', opensInMinutes: 30 });
+  assert.equal(middayDecision({ ...B, nowMin: toMinutes('13:00') }).state, 'open');
+  assert.equal(middayDecision({ ...B, nowMin: toMinutes('13:59') }).closesInMinutes, 1);
+  assert.equal(middayDecision({ ...B, nowMin: toMinutes('14:00') }).state, 'closed');
 });
 
 test('day helpers', () => {
